@@ -1,0 +1,41 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Gradio / runtime artifacts
+.gradio/
+flagged/
+audio_cache/
+*.wav
+*.mp3
+
+# Logs and local data dumps
+logs/
+*.log
+data/exports/
+
+# Tool scratch
+.claude-flow/
+.Claude/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
