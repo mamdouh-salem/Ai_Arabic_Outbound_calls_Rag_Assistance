@@ -36,9 +36,10 @@ dependencies = [
     "openai>=1.55.0",
     "elevenlabs>=1.13.0",
     "soundfile>=0.12.1",
-    "pydub>=0.25.1",
     "webrtcvad-wheels>=2.0.14",
     "numpy>=1.26.0",
+    # resample_poly for 48 kHz browser mic -> 16 kHz Whisper (anti-aliased; np.interp is not)
+    "scipy>=1.14.0",
 
     # --- RAG ---
     "rank-bm25>=0.2.2",

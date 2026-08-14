@@ -1,0 +1,17 @@
+# Development dependencies. Mirrors [project.optional-dependencies] in pyproject.toml.
+# Install:  pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# Testing
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+
+# Lint / types
+ruff>=0.8.0
+mypy>=1.13.0
+
+# Optional: local cross-encoder reranker.
+# The default reranker is LLM-based, so this is only needed if rag/rerank.py
+# is switched to the local model. Heavy (~2 GB with torch) — uncomment deliberately.
+# sentence-transformers>=3.3.0

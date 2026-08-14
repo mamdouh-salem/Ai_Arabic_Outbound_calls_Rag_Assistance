@@ -79,6 +79,7 @@ db/migrations/              SQL: extensions, core tables, KB tables, indexes, hy
 db/seed/                    seed SQL
 scripts/                    ingest_kb, seed_db, eval_rag, run_api, run_ui
 src/outbound_ai/
+  common/                   shared pure helpers (Arabic normalization)
   config/                   settings (pydantic-settings), logging, LangSmith tracing setup
   schemas/                  pydantic models shared across API, graph and UI
   db/                       Supabase client + repositories (the only layer that touches the DB)
@@ -109,11 +110,21 @@ uv pip install -e ".[dev]"
 cp .env.example .env
 ```
 
+Run the tests (no API keys needed — the voice layer has fakes):
+
+```bash
+pytest tests/unit -q
+```
+
 ## Status
 
-Scaffolding only. Next steps, in order:
+**Done:** project scaffolding, configuration, Arabic normalization, voice layer
+(`STTPort` / `TTSPort` / `EndpointingPort` + Whisper, ElevenLabs and push-to-talk adapters,
+streaming sentence chunker, static prompt cache, fakes). 35 unit tests, no network.
 
-1. Voice layer — Arabic STT/TTS design and adapters (UC1 requirement).
+Next steps, in order:
+
+1. ~~Voice layer — Arabic STT/TTS design and adapters (UC1 requirement).~~ ✅ see `docs/05_voice_design.md`
 2. Database schema — handcrafted together (customers, tickets, calls, turns, escalations, reports).
 3. Knowledge base — handcrafted Arabic SOP documents and their chunk metadata.
 4. RAG pipeline — hybrid search, metadata filtering, reranking, grounding check.
