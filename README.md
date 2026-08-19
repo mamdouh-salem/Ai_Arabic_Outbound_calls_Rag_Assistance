@@ -269,13 +269,13 @@ other three, grouped so each person can work with minimal cross-blocking:
 
 | Owner | Area | Covers |
 |---|---|---|
-| **You** | Agentic voice AI + RAG | LangGraph agents (`outbound_call`, `routing`, `reporting`), Vonage telephony adapter, `orchestration/` call queue, PostgreSQL checkpointer, dialect fixes (STT/TTS/prompting), RAG ingestion API + citations, hybrid retrieval workspace-scoping |
+| **Teammate A** | Agentic voice AI + RAG | LangGraph agents (`outbound_call`, `routing`, `reporting`), Vonage telephony adapter, `orchestration/` call queue, PostgreSQL checkpointer, dialect fixes (STT/TTS/prompting), RAG ingestion API + citations, hybrid retrieval workspace-scoping |
 | **Teammate B** | Frontend | `web/` React+Next.js app: auth screens, campaign UI, live call monitor, agent desk chat UI, KB admin (upload UI), reports dashboard |
 | **Teammate C** | Backend + Auth + Multi-tenancy | FastAPI routers (`api/`), Supabase Auth integration, `workspaces`/`users` schema + RLS policies, role/permission middleware |
 | **Teammate D** | Data/DB + QA + Reporting | DB migrations for the new tables, seed data for multi-tenant testing, `eval_rag` expansion, FCR reporting logic, integration test coverage across the whole flow |
 
 Interfaces to agree on early so nobody blocks anyone: the JWT claims shape (Teammate C defines,
-everyone else consumes), the KB upload API contract (you + Teammate B), and the workspace_id
+everyone else consumes), the KB upload API contract (Teammate A + Teammate B), and the workspace_id
 threading through every table (Teammate C + Teammate D).
 
 ---
