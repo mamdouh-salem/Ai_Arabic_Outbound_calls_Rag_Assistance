@@ -11,10 +11,11 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.0.0",
 
     # --- Agent harness (LangChain) ---
-    "langchain>=0.3.0",
-    "langchain-core>=0.3.0",
-    "langchain-openai>=0.2.0",
-    "langchain-text-splitters>=0.3.0",
+
+    "langchain>=0.3.0,<0.4.0",
+    "langchain-core>=0.3.0,<0.4.0",
+    "langchain-openai>=0.2.0,<0.3.0",
+    "langchain-google-genai>=2.0.0,<3.0.0",
 
     # --- Observability ---
     "langsmith>=0.1.140",
@@ -44,6 +45,9 @@ dependencies = [
     # --- RAG ---
     "rank-bm25>=0.2.2",
     "tiktoken>=0.8.0",
+    "sentence-transformers>=3.3.0",
+    # --- Telephony (Vonage) ---
+    "vonage>=4.8.2",
 
     # --- Core ---
     "pydantic>=2.9.0",
@@ -60,7 +64,7 @@ dependencies = [
 # Local cross-encoder reranker. Optional: the default reranker is LLM-based,
 # so this is only needed if we switch rag/rerank.py to the local model.
 rerank = [
-    "sentence-transformers>=3.3.0",
+    
 ]
 dev = [
     "pytest>=8.3.0",

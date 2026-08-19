@@ -39,3 +39,6 @@ data/exports/
 Thumbs.db
 .vscode/
 .idea/
+vonage_private.key
+*.key
+*.pem
