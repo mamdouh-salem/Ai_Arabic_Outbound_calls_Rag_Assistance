@@ -10,11 +10,15 @@ import asyncio
 from outbound_ai.rag.generation import generate_answer
 
 
-async def retrieve(query_text: str, kb_category: str) -> tuple[str, list[dict], bool]:
+async def retrieve(
+    query_text: str, kb_category: str, workspace_id: str | None = None
+) -> tuple[str, list[dict], bool]:
     """Blocking (GPU-bound via generate_answer), so offloaded to a thread —
     same reasoning as agents/intent_classifier.py.
+
+    workspace_id scopes retrieval to one tenant when provided.
     """
-    result = await asyncio.to_thread(generate_answer, query_text, kb_category)
+    result = await asyncio.to_thread(generate_answer, query_text, kb_category, workspace_id)
 
     kb_answer_given = result["chunks_used"] > 0
     retrieved_chunks = [{"source": s} for s in result["sources"]]

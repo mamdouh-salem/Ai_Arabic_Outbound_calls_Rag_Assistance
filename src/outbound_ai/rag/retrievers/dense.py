@@ -24,11 +24,13 @@ class RetrievedChunk:
 
 
 # category is matched against metadata->>'category'; None = no filter.
+# workspace_id: tenant guard — None = no filter (single-tenant/dev only).
 DENSE_SQL = """
     SELECT id, content, metadata, 1 - (embedding <=> %(query_embedding)s) AS score
     FROM knowledge_base_chunks
     WHERE embedding IS NOT NULL
       AND (%(category)s::text IS NULL OR metadata ->> 'category' = %(category)s)
+      AND (%(workspace_id)s::uuid IS NULL OR workspace_id = %(workspace_id)s::uuid)
     ORDER BY embedding <=> %(query_embedding)s
     LIMIT %(top_k)s
 """
@@ -38,6 +40,7 @@ def dense_search(
     query: str,
     top_k: int | None = None,
     category: str | None = None,
+    workspace_id: str | None = None,
 ) -> list[RetrievedChunk]:
     settings = get_settings()
     top_k = top_k or settings.rag_top_k_dense
@@ -49,7 +52,12 @@ def dense_search(
         with conn.cursor() as cur:
             cur.execute(
                 DENSE_SQL,
-                {"query_embedding": query_embedding, "category": category, "top_k": top_k},
+                {
+                    "query_embedding": query_embedding,
+                    "category": category,
+                    "workspace_id": workspace_id,
+                    "top_k": top_k,
+                },
             )
             rows = cur.fetchall()
 

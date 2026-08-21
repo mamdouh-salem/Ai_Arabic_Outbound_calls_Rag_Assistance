@@ -28,17 +28,74 @@ from uuid import UUID
 
 import structlog
 from fastapi import HTTPException, Request, status
+from httpx import AsyncClient
 from jose import ExpiredSignatureError, JWTError, jwt
-from supabase import Client, create_client
+from supabase import Client
 
 from outbound_ai.auth.models import AppRole, AuthContext
 from outbound_ai.config.settings import Settings
+from outbound_ai.db.service_client import get_service_client
 
 log = structlog.get_logger(__name__)
 
-# Supabase JWT algorithm — HS256 by default.  Change to "RS256" if you've
-# configured asymmetric signing in your Supabase project settings.
-_JWT_ALGORITHM = "HS256"
+# Legacy projects sign user JWTs with a symmetric HS256 secret (the classic
+# "JWT Secret" in Dashboard → API). Current projects use asymmetric keys
+# (ES256 today) published as a JWKS — the shared secret CANNOT verify those,
+# so we resolve the public key by `kid` from /.well-known/jwks.json instead.
+_HS256_ALG = "HS256"
+_SUPPORTED_ASYMMETRIC_ALGS = ("ES256", "RS256")
+
+_jwks_keys: list[dict] | None = None
+
+
+async def _resolve_signing_key(token: str, settings: Settings):
+    """Return (key, algorithms) to verify `token` with.
+
+    HS256 -> the legacy shared secret.
+    ES256/RS256 -> the matching public key from Supabase's JWKS endpoint
+    (fetched once and cached; refreshed if an unknown kid shows up, i.e.
+    after Supabase rotates keys)."""
+    global _jwks_keys
+
+    try:
+        header = jwt.get_unverified_header(token)
+    except JWTError:
+        log.warning("jwt_unparsable_header")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
+    alg = header.get("alg", _HS256_ALG)
+
+    if alg == _HS256_ALG:
+        if not settings.supabase_jwt_secret:
+            log.error("jwt_secret_not_configured")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Server auth configuration error.",
+            )
+        return settings.supabase_jwt_secret.get_secret_value(), [_HS256_ALG]
+
+    if alg not in _SUPPORTED_ASYMMETRIC_ALGS:
+        log.error("unsupported_jwt_alg", alg=alg)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
+
+    kid = header.get("kid")
+    known_kids = {k.get("kid") for k in (_jwks_keys or [])}
+    if _jwks_keys is None or (kid and kid not in known_kids):
+        jwks_url = f"{settings.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        async with AsyncClient(timeout=10.0) as client:
+            resp = await client.get(jwks_url)
+            resp.raise_for_status()
+        _jwks_keys = resp.json().get("keys", [])
+        log.info("jwks_loaded", keys=len(_jwks_keys))
+
+    for key_dict in _jwks_keys or []:
+        if kid and key_dict.get("kid") != kid:
+            continue
+        from jose import jwk as jose_jwk
+
+        return jose_jwk.construct(key_dict, algorithm=key_dict.get("alg") or alg), [alg]
+
+    log.error("jwks_kid_not_found", kid=kid)
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
 
 # Claim key inside the JWT where Supabase stores server-set metadata
 # (cannot be forged by the client — unlike user_metadata).
@@ -69,7 +126,7 @@ async def resolve_auth_context(
                    and is not a super_admin.
     """
     raw_token = _extract_bearer_token(request)
-    payload   = _decode_jwt(raw_token, settings)
+    payload   = await _decode_jwt(raw_token, settings)
     return await _build_auth_context(request, payload, settings)
 
 
@@ -105,27 +162,14 @@ def _extract_bearer_token(request: Request) -> str:
 # Step 2: JWT decode + verification
 # ---------------------------------------------------------------------------
 
-def _decode_jwt(token: str, settings: Settings) -> dict[str, Any]:
-    """Verify the Supabase JWT signature and decode the payload.
-
-    Raises HTTP 401 for any JWT error (expired, invalid signature, malformed).
-    """
-    if not settings.supabase_jwt_secret:
-        log.error("jwt_secret_not_configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server auth configuration error.",
-        )
-
-    secret = settings.supabase_jwt_secret.get_secret_value()
-
+def _decode_jwt_sync(token: str, key, algorithms: list[str]) -> dict[str, Any]:
+    """Verify signature/claims once the signing key is resolved."""
     try:
-        payload: dict[str, Any] = jwt.decode(
+        return jwt.decode(
             token,
-            secret,
-            algorithms=[_JWT_ALGORITHM],
+            key,
+            algorithms=algorithms,
             # Supabase sets audience to "authenticated" for user JWTs.
-            # Set options={"verify_aud": False} only if you use custom audiences.
             options={"verify_aud": False},
         )
     except ExpiredSignatureError:
@@ -143,7 +187,10 @@ def _decode_jwt(token: str, settings: Settings) -> dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return payload
+
+async def _decode_jwt(token: str, settings: Settings) -> dict[str, Any]:
+    key, algorithms = await _resolve_signing_key(token, settings)
+    return _decode_jwt_sync(token, key, algorithms)
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +286,7 @@ async def _lookup_workspace_membership(
 
     Raises HTTP 403 if the user has no workspace membership.
     """
-    sb: Client = _get_service_client(settings)
+    sb: Client = get_service_client()
 
     try:
         result = (
@@ -276,22 +323,3 @@ async def _lookup_workspace_membership(
         )
 
     return workspace_id, role
-
-
-# ---------------------------------------------------------------------------
-# Supabase service-role client (singleton per process)
-# ---------------------------------------------------------------------------
-_sb_service_client: Client | None = None
-
-
-def _get_service_client(settings: Settings) -> Client:
-    """Lazily create a Supabase service-role client (process-singleton)."""
-    global _sb_service_client  # noqa: PLW0603
-    if _sb_service_client is None:
-        if not settings.supabase_service_role_key:
-            raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is not configured.")
-        _sb_service_client = create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key.get_secret_value(),
-        )
-    return _sb_service_client

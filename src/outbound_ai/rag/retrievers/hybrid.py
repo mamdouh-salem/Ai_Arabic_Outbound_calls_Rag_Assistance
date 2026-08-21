@@ -59,17 +59,24 @@ def hybrid_search(
     query: str,
     category: str | None = None,
     top_n: int | None = None,
+    workspace_id: str | None = None,
 ) -> list[FusedChunk]:
     """Run dense + sparse retrieval, fuse with RRF, return the top_n chunks.
 
     category: optional metadata filter, e.g. "billing" / "technical"
               (matches the kb_category values used on the tickets table).
+    workspace_id: tenant guard — never returns another workspace's chunks.
+                  None = unfiltered (dev/single-tenant only).
     """
     settings = get_settings()
     top_n = top_n or settings.rag_top_n_after_rerank
 
-    dense_results = dense_search(query, top_k=settings.rag_top_k_dense, category=category)
-    sparse_results = sparse_search(query, top_k=settings.rag_top_k_sparse, category=category)
+    dense_results = dense_search(
+        query, top_k=settings.rag_top_k_dense, category=category, workspace_id=workspace_id
+    )
+    sparse_results = sparse_search(
+        query, top_k=settings.rag_top_k_sparse, category=category, workspace_id=workspace_id
+    )
 
     fused = _rrf_fuse([dense_results, sparse_results], k=settings.rag_rrf_k)
     return fused[:top_n]

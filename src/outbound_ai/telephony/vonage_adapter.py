@@ -158,45 +158,6 @@ class VonageTelephonyAdapter(TelephonyPort):
         if response.status_code not in (200, 204):
             log.error("vonage_ncco_update_failed", call_id=call_id, status=response.status_code, body=response.text)
 
-    async def update_call_ncco(self, call_id: str, ncco: list) -> None:
-        """Push a new NCCO into a live call — this is what makes multi-turn
-        dialogue possible without WebSocket audio streaming."""
-        async with httpx.AsyncClient() as client:
-            response = await client.put(
-                f"{_VOICE_API_BASE}/{call_id}",
-                json={"action": "transfer", "destination": {"type": "ncco", "ncco": ncco}},
-                headers=self._auth_headers(),
-                timeout=15.0,
-            )
-        if response.status_code not in (200, 204):
-            log.error("vonage_ncco_update_failed", call_id=call_id, status=response.status_code, body=response.text)
-
-    async def update_call_ncco(self, call_id: str, ncco: list) -> None:
-        """Push a new NCCO into a live call — this is what makes multi-turn
-        dialogue possible without WebSocket audio streaming."""
-        async with httpx.AsyncClient() as client:
-            response = await client.put(
-                f"{_VOICE_API_BASE}/{call_id}",
-                json={"action": "transfer", "destination": {"type": "ncco", "ncco": ncco}},
-                headers=self._auth_headers(),
-                timeout=15.0,
-            )
-        if response.status_code not in (200, 204):
-            log.error("vonage_ncco_update_failed", call_id=call_id, status=response.status_code, body=response.text)
-
-    async def update_call_ncco(self, call_id: str, ncco: list) -> None:
-        """Push a new NCCO into a live call — this is what makes multi-turn
-        dialogue possible without WebSocket audio streaming."""
-        async with httpx.AsyncClient() as client:
-            response = await client.put(
-                f"{_VOICE_API_BASE}/{call_id}",
-                json={"action": "transfer", "destination": {"type": "ncco", "ncco": ncco}},
-                headers=self._auth_headers(),
-                timeout=15.0,
-            )
-        if response.status_code not in (200, 204):
-            log.error("vonage_ncco_update_failed", call_id=call_id, status=response.status_code, body=response.text)
-
     async def place_call_with_ncco(self, to_number: str, from_number: str, ncco: list):
         """Place a call with a caller-supplied NCCO. Returns (CallSession, conversation_uuid)."""
         payload = {

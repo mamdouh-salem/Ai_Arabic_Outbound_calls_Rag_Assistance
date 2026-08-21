@@ -15,6 +15,7 @@ SPARSE_SQL = """
     FROM knowledge_base_chunks
     WHERE fts_tokens @@ plainto_tsquery('arabic', %(query)s)
       AND (%(category)s::text IS NULL OR metadata ->> 'category' = %(category)s)
+      AND (%(workspace_id)s::uuid IS NULL OR workspace_id = %(workspace_id)s::uuid)
     ORDER BY score DESC
     LIMIT %(top_k)s
 """
@@ -24,13 +25,22 @@ def sparse_search(
     query: str,
     top_k: int | None = None,
     category: str | None = None,
+    workspace_id: str | None = None,
 ) -> list[RetrievedChunk]:
     settings = get_settings()
     top_k = top_k or settings.rag_top_k_sparse
 
     with psycopg.connect(settings.database_url.get_secret_value()) as conn:
         with conn.cursor() as cur:
-            cur.execute(SPARSE_SQL, {"query": query, "category": category, "top_k": top_k})
+            cur.execute(
+                SPARSE_SQL,
+                {
+                    "query": query,
+                    "category": category,
+                    "workspace_id": workspace_id,
+                    "top_k": top_k,
+                },
+            )
             rows = cur.fetchall()
 
     return [

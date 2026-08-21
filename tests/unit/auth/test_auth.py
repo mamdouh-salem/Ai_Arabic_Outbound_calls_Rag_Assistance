@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from jose import jwt
 
 from outbound_ai.auth.middleware import (
-    _JWT_ALGORITHM,
+    _HS256_ALG,
     _decode_jwt,
     _extract_bearer_token,
     resolve_auth_context,
@@ -61,7 +61,7 @@ def _make_token(
     }
     if app_metadata:
         payload["app_metadata"] = app_metadata
-    return jwt.encode(payload, secret, algorithm=_JWT_ALGORITHM)
+    return jwt.encode(payload, secret, algorithm=_HS256_ALG)
 
 
 def _make_request(token: str | None = None, workspace_header: str | None = None) -> MagicMock:
@@ -112,40 +112,45 @@ class TestExtractBearerToken:
 # ===========================================================================
 
 class TestDecodeJwt:
-    def test_valid_token_decoded(self):
+    @pytest.mark.asyncio
+    async def test_valid_token_decoded(self):
         token    = _make_token()
         settings = _make_settings()
-        payload  = _decode_jwt(token, settings)
+        payload  = await _decode_jwt(token, settings)
         assert payload["sub"] == str(USER_ID)
         assert payload["email"] == "agent@example.com"
 
-    def test_expired_token_raises_401(self):
+    @pytest.mark.asyncio
+    async def test_expired_token_raises_401(self):
         token    = _make_token(exp_offset=-1)  # expired 1 second ago
         settings = _make_settings()
         with pytest.raises(HTTPException) as exc_info:
-            _decode_jwt(token, settings)
+            await _decode_jwt(token, settings)
         assert exc_info.value.status_code == 401
         assert "expired" in exc_info.value.detail.lower()
 
-    def test_wrong_secret_raises_401(self):
+    @pytest.mark.asyncio
+    async def test_wrong_secret_raises_401(self):
         token    = _make_token(secret="correct-secret-32-chars!!!!!!!!")
         settings = _make_settings(secret="wrong-secret-32-chars!!!!!!!!!")
         with pytest.raises(HTTPException) as exc_info:
-            _decode_jwt(token, settings)
+            await _decode_jwt(token, settings)
         assert exc_info.value.status_code == 401
 
-    def test_malformed_token_raises_401(self):
+    @pytest.mark.asyncio
+    async def test_malformed_token_raises_401(self):
         settings = _make_settings()
         with pytest.raises(HTTPException) as exc_info:
-            _decode_jwt("not.a.real.jwt", settings)
+            await _decode_jwt("not.a.real.jwt", settings)
         assert exc_info.value.status_code == 401
 
-    def test_missing_jwt_secret_raises_500(self):
+    @pytest.mark.asyncio
+    async def test_missing_jwt_secret_raises_500(self):
         token    = _make_token()
         settings = _make_settings()
         settings.__dict__["supabase_jwt_secret"] = None  # force None
         with pytest.raises(HTTPException) as exc_info:
-            _decode_jwt(token, settings)
+            await _decode_jwt(token, settings)
         assert exc_info.value.status_code == 500
 
 
@@ -217,7 +222,7 @@ class TestResolveAuthContextRegularUser:
         req      = _make_request(token=token)
 
         with patch(
-            "outbound_ai.auth.middleware._get_service_client",
+            "outbound_ai.auth.middleware.get_service_client",
             return_value=_mock_supabase_membership(WORKSPACE_ID, "agent"),
         ):
             ctx = await resolve_auth_context(req, settings)
@@ -233,7 +238,7 @@ class TestResolveAuthContextRegularUser:
         req      = _make_request(token=token)
 
         with patch(
-            "outbound_ai.auth.middleware._get_service_client",
+            "outbound_ai.auth.middleware.get_service_client",
             return_value=_mock_supabase_membership(WORKSPACE_ID, "admin"),
         ):
             ctx = await resolve_auth_context(req, settings)
@@ -257,7 +262,7 @@ class TestResolveAuthContextRegularUser:
         mock_client.table.return_value  = mock_table
 
         with patch(
-            "outbound_ai.auth.middleware._get_service_client",
+            "outbound_ai.auth.middleware.get_service_client",
             return_value=mock_client,
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -270,7 +275,7 @@ class TestResolveAuthContextRegularUser:
         from pydantic import SecretStr
         # Manually craft a token without 'sub'
         payload = {"email": "x@x.com", "exp": int(time.time()) + 3600}
-        token   = jwt.encode(payload, JWT_SECRET, algorithm=_JWT_ALGORITHM)
+        token   = jwt.encode(payload, JWT_SECRET, algorithm=_HS256_ALG)
         settings = _make_settings()
         req      = _make_request(token=token)
 

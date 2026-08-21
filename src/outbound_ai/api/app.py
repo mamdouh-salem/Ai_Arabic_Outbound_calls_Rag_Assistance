@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from supabase import create_client
 
 from outbound_ai.agents import intent_classifier, kb_assist, reporting, routing
+from outbound_ai.api.routers import admin_users, data, kb as kb_docs
 from outbound_ai.auth import AuthContext, get_current_user
 from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
 from outbound_ai.config.settings import get_settings
@@ -46,6 +47,13 @@ app.add_middleware(
 _adapter = VonageTelephonyAdapter()
 CALL_STATE = {}
 HUMAN_AGENT_NUMBER = "+201211497586"
+
+# ---------------------------------------------------------------------------
+# Routers (auth, KB management, user management, data visibility)
+# ---------------------------------------------------------------------------
+app.include_router(kb_docs.router)
+app.include_router(admin_users.router)
+app.include_router(data.router)
 
 
 def _base():

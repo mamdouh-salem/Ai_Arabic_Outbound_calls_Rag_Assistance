@@ -16,13 +16,19 @@ from outbound_ai.rag.retrievers.hybrid import hybrid_search
 log = structlog.get_logger(__name__)
 
 
-def generate_answer(question: str, category: str | None = None) -> dict:
+def generate_answer(
+    question: str,
+    category: str | None = None,
+    workspace_id: str | None = None,
+) -> dict:
     """Run the full RAG loop: retrieve -> build context -> generate.
 
     Returns {"answer": str, "sources": list[str], "chunks_used": int}.
+    workspace_id scopes retrieval to one tenant — always pass it in
+    multi-tenant contexts.
     """
     settings = get_settings()
-    chunks = hybrid_search(question, category=category)
+    chunks = hybrid_search(question, category=category, workspace_id=workspace_id)
     if not chunks:
         return {"answer": NO_CONTEXT_FALLBACK, "sources": [], "chunks_used": 0}
 
