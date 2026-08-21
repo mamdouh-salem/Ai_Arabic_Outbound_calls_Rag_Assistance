@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: SecretStr | None = None
     supabase_service_role_key: SecretStr | None = None
+    # JWT secret from Supabase project settings → API → JWT Secret.
+    # Used by auth/middleware.py to verify incoming Bearer tokens (HS256).
+    supabase_jwt_secret: SecretStr | None = None
     database_url: SecretStr | None = None
 
     # -------------------------------------------------------------- Observability

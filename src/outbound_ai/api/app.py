@@ -2,21 +2,47 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Annotated
 
 import google.generativeai as genai
 import httpx
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from supabase import create_client
 
 from outbound_ai.agents import intent_classifier, kb_assist, reporting, routing
+from outbound_ai.auth import AuthContext, get_current_user
+from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
 from outbound_ai.config.settings import get_settings
 from outbound_ai.telephony.vonage_adapter import VonageTelephonyAdapter
 
 log = structlog.get_logger(__name__)
-app = FastAPI()
+app = FastAPI(
+    title="Arabic AI Outbound Call Agent",
+    description="Multi-agent Arabic outbound call system with RAG knowledge assistant.",
+    version="0.2.0",
+    # Disable automatic docs in production — re-enable for dev via APP_ENV check
+    docs_url="/docs" if get_settings().app_env == "dev" else None,
+    redoc_url="/redoc" if get_settings().app_env == "dev" else None,
+)
 settings = get_settings()
+
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
+
+# CORS — tighten allowed_origins before production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if settings.app_env == "dev" else [],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Workspace-Id"],
+)
+
 _adapter = VonageTelephonyAdapter()
 CALL_STATE = {}
 HUMAN_AGENT_NUMBER = "+201211497586"
@@ -24,6 +50,33 @@ HUMAN_AGENT_NUMBER = "+201211497586"
 
 def _base():
     return settings.public_webhook_base_url
+
+
+# ---------------------------------------------------------------------------
+# Health / auth probe  (demonstrates dependency injection)
+# ---------------------------------------------------------------------------
+
+@app.get("/health", tags=["ops"])
+async def health_check():
+    """Unauthenticated liveness probe — safe to hit from load-balancers."""
+    return {"status": "ok", "version": app.version}
+
+
+@app.get("/health/auth", tags=["ops"])
+async def health_check_auth(ctx: CurrentUser):
+    """Authenticated probe — validates JWT and returns resolved identity.
+
+    Useful for frontend auth flows to confirm the token is valid and
+    to surface the user's workspace + role without a separate /me endpoint.
+    """
+    return {
+        "status": "ok",
+        "user_id": str(ctx.user_id),
+        "workspace_id": str(ctx.workspace_id) if ctx.workspace_id else None,
+        "role": ctx.role.value,
+        "email": ctx.email,
+    }
+
 
 
 def _rec(stage):
@@ -97,10 +150,21 @@ async def recording(request: Request):
     conv, url = b.get("conversation_uuid"), b.get("recording_url")
     ctx = CALL_STATE.get(conv, {})
     call_id = ctx.get("call_id")
-    log.info("recording", stage=stage, call_id=call_id)
     if not url or not call_id:
         return {}
 
+    # Vonage can fire the same recording webhook more than once for the same
+    # stage/call — without this guard, every retry re-transcribes, re-runs
+    # the whole intent/KB/reporting pipeline, and writes a fresh near-duplicate
+    # row to call_reports.jsonl + Supabase (this was the "same words logged
+    # twice, 11 seconds apart" issue).
+    processed = ctx.setdefault("processed_stages", set())
+    if stage in processed:
+        log.warning("duplicate_recording_webhook", call_id=call_id, stage=stage)
+        return {}
+    processed.add(stage)
+
+    log.info("recording", stage=stage, call_id=call_id)
     async with httpx.AsyncClient() as c:
         audio = (await c.get(url, headers=_adapter._auth_headers(), timeout=20.0)).content
     text = _transcribe(audio)
