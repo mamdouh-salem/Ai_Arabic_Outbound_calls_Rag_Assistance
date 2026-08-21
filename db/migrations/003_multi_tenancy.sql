@@ -596,7 +596,10 @@ as $$
         select
             id,
             max(content)  as content,
-            max(metadata) as metadata,
+            -- no max(jsonb) aggregate exists in Postgres (ERROR 42883) —
+            -- cast through text. Safe here: every row in a group shares the
+            -- same id, hence identical content/metadata from the source table.
+            max(metadata::text)::jsonb as metadata,
             sum(1.0 / (rrf_k + rnk)) as score
         from (
             select * from dense
