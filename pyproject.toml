@@ -16,6 +16,8 @@ dependencies = [
     "langchain-core>=0.3.0,<0.4.0",
     "langchain-openai>=0.2.0,<0.3.0",
     "langchain-google-genai>=2.0.0,<3.0.0",
+    # raw Gemini SDK — imported directly by api/app.py for transcription fallback
+    "google-generativeai>=0.8.0",
 
     # --- Observability ---
     "langsmith>=0.1.140",
