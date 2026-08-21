@@ -142,6 +142,77 @@ python scripts/smoke_test_graph_real.py  # same graph, real intent classificatio
 
 ---
 
+## Auth & multi-tenancy setup (Phase 2 — branch `oxAlpha`)
+
+Implemented so far: `users` / `workspaces` / `workspace_members` tables with RLS,
+JWT verification middleware (`auth/middleware.py`), role guards
+(`auth/dependencies.py`: `get_current_user`, `require_admin_or_above`,
+`require_super_admin`), `/health/auth` probe endpoint, 26 unit tests.
+
+### One-time database setup (Supabase SQL Editor)
+
+1. Run `db/migrations/003_multi_tenancy.sql`
+   - Adds `workspace_id` to `customers`/`tickets`/`knowledge_base_chunks`/`calls`,
+     backfills everything into the `default` workspace, enables RLS, replaces
+     `match_chunks()` with a workspace-aware version.
+   - Note: no FK to `auth.users` — the SQL Editor role cannot create DDL
+     referencing the auth schema (ERROR 42501). Integrity is handled by the
+     profile hook + JWT middleware instead.
+2. Run `db/seed/001_seed_workspace.sql` (idempotent).
+
+### Environment
+
+```bash
+# .env — find the value in Dashboard → Project Settings → API → JWT Secret
+SUPABASE_JWT_SECRET=<your-jwt-secret>
+```
+
+### First super_admin bootstrap
+
+There is no sign-up endpoint yet (next phase of work), so create the first
+account manually:
+
+1. Dashboard → Authentication → Users → **Add user** (email + password).
+2. Copy the user's UUID, then in the SQL Editor:
+
+   ```sql
+   insert into users (id, email, display_name, platform_role)
+   values ('<auth-user-uuid>', '<email>', '<name>', 'super_admin')
+   on conflict (id) do update set platform_role = 'super_admin';
+   ```
+
+3. Optional — also make them admin of the default workspace (needed for
+   workspace-scoped writes even as super_admin when using the anon key):
+
+   ```sql
+   insert into workspace_members (workspace_id, user_id, role)
+   values ('aaaaaaaa-0000-0000-0000-000000000001', '<auth-user-uuid>', 'admin')
+   on conflict (workspace_id, user_id) do update set role = 'admin';
+   ```
+
+### Auto-profile trigger (optional, recommended)
+
+New sign-ups won't get a `public.users` row automatically until this trigger
+exists (cannot be created from the SQL Editor):
+
+Dashboard → Database → Triggers → New trigger → table `auth.users`,
+event `INSERT`, timing AFTER, function `public.handle_new_auth_user`.
+Or via CLI:
+
+```bash
+supabase db execute --sql "create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_auth_user();"
+```
+
+### Verifying auth works
+
+```bash
+uvicorn outbound_ai.api.app:app --reload   # or scripts/run_api if present
+curl http://localhost:8000/health                       # unauthenticated → {"status":"ok"}
+curl http://localhost:8000/health/auth -H "Authorization: Bearer <jwt>"   # → identity JSON
+```
+
+---
+
 ## Phase 2 requirements
 
 Feedback from review: the demo proved the concept works, but four gaps block it from being a
@@ -306,7 +377,9 @@ threading through every table (Teammate C + Teammate D).
 - LangGraph node diagram generation via `compiled_graph.get_graph().draw_mermaid_png()`
 
 **In progress / next steps, roughly in order:**
-1. **Auth** — Supabase Auth integration, JWT middleware in FastAPI, sign-up/login flow.
+1. **Auth** — DONE on `oxAlpha`: multi-tenancy schema + RLS (003 migration), JWT
+   middleware, role guards, `/health/auth` probe, 26 unit tests. Remaining:
+   sign-up/login API endpoints, auto-profile trigger registration, frontend auth screens.
 2. **Multi-tenancy schema** — `workspaces` + `users`/`workspace_members` tables, `workspace_id`
    threaded through `customers`/`tickets`/`knowledge_base_chunks`, RLS policies, role checks.
 3. **RAG document upload + citations** — ingestion API endpoint, citation metadata surfaced
