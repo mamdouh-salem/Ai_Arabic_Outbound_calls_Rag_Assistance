@@ -203,11 +203,16 @@ async function loadTickets() {
   renderTable("tickets-table", rows, [
     { h: "ID",        f: r => esc(r.id).slice(0, 8) },
     { h: "Title",     f: r => `<span dir="rtl">${esc(r.title)}</span>` },
+    { h: "Customer",  f: r => `<span dir="rtl">${esc(r.customer_name ?? "—")}</span>` },
+    { h: "Phone",     f: r => r.customer_phone
+        ? `<code dir="ltr">${esc(r.customer_phone)}</code>`
+        : '<span class="badge danger">no phone ⚠️</span>' },
     { h: "Status",    f: r => esc(r.status ?? "-") },
     { h: "Category",  f: r => esc(r.kb_category ?? "-") },
     { h: "Assigned",  f: r => r.assigned_to ? esc(r.assigned_to.slice(0, 8)) : '<span class="muted">unassigned</span>' },
-    ...(canCall ? [{ h: "", f: r =>
-      `<button class="btn primary sm" onclick="callTicket('${esc(r.id)}')">📞 Call</button>` }] : []),
+    ...(canCall ? [{ h: "", f: r => r.customer_phone
+      ? `<button class="btn primary sm" onclick="callTicket('${esc(r.id)}')">📞 Call</button>`
+      : `<button class="btn sm" disabled title="customer has no phone">📞</button>` }] : []),
   ]);
 }
 

@@ -67,11 +67,18 @@ def visible_call_filters(
 @router.get("/tickets")
 async def list_tickets(ctx: CurrentUser) -> list[dict]:
     sb = get_service_client()
-    query = sb.table("tickets").select("*")
+    # join customers for name+phone so the UI can show who gets dialed
+    query = sb.table("tickets").select("*, customers(name, phone)")
     for column, value in (visible_ticket_filters(ctx) or {}).items():
         query = query.eq(column, value)
     res = query.execute()
-    return res.data or []
+    rows = res.data or []
+    # flatten the joined customer onto each ticket for simple frontend use
+    for r in rows:
+        c = r.pop("customers", None) or {}
+        r["customer_name"] = c.get("name")
+        r["customer_phone"] = c.get("phone")
+    return rows
 
 
 @router.get("/calls")
