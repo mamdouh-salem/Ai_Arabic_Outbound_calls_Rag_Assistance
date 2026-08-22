@@ -82,8 +82,7 @@
           <input id="kb-category" placeholder="billing / routers / accounts ...">
           <label>Title (defaults to filename)</label>
           <input id="kb-title" placeholder="SOP_Billing_06">
-          <label>File (.txt .md .pdf) — or paste text below</label>
-          <input id="kb-file" type="file" accept=".txt,.md,.markdown,.pdf">
+          <label>File (.txt .md .pdf .docx …) — or paste text below</label>          <input id="kb-file" type="file" accept=".txt,.md,.markdown,.pdf,.docx,.csv,.json">
           <label>…or raw text</label>
           <textarea id="kb-content" rows="6" dir="rtl" placeholder="الصق النص العربي هنا..."></textarea>
           <button class="btn primary" onclick="kbUpload()">Upload &amp; Ingest</button>
@@ -124,6 +123,12 @@
         </div>
       </div>
 
+      <div class="panel" id="panel-hierarchy">
+        <h3>Platform hierarchy <span class="badge danger">super admin only</span></h3>
+        <p class="muted">Every workspace → its admins → the users beneath them.</p>
+        <div id="hierarchy-tree" class="code" style="max-height:420px"></div>
+      </div>
+
       <div class="panel" id="panel-workspaces">
         <h3>Workspaces <span class="badge danger">super admin only</span></h3>
         <div class="grid-2">
@@ -139,6 +144,27 @@
             <select id="nw-plan"><option>free</option><option>pro</option><option>enterprise</option></select>
             <button class="btn primary" onclick="createWorkspace()">Create workspace</button>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- RAG CHAT ---------- -->
+    <section id="screen-chat" class="screen hidden">
+      <h2>RAG Assistant</h2>
+      <p class="muted">Grounded answers from your workspace knowledge base, with citations.</p>
+      <div class="grid-2">
+        <div class="panel">
+          <div id="chat-log" class="code" style="min-height:320px;max-height:480px">Ask a question about the knowledge base…</div>
+        </div>
+        <div class="panel narrow">
+          <label>Category filter <span class="muted">(optional)</span></label>
+          <select id="chat-category">
+            <option value="">all categories</option>
+            <option>routers</option><option>billing</option><option>accounts</option>
+          </select>
+          <label>Question</label>
+          <textarea id="chat-question" rows="3" dir="rtl" placeholder="اكتب سؤالك هنا..."></textarea>
+          <button class="btn primary" onclick="sendChat()">Ask 🤖</button>
         </div>
       </div>
     </section>

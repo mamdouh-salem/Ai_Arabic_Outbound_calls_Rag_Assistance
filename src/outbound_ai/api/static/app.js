@@ -108,6 +108,7 @@ function logout(expired = false) {
 
 const TABS = [
   { id: "dashboard",  label: "Dashboard",   roles: ["agent", "admin", "super_admin"] },
+  { id: "chat",       label: "RAG Chat",    roles: ["agent", "admin", "super_admin"] },
   { id: "tickets",    label: "Tickets",     roles: ["agent", "admin", "super_admin"] },
   { id: "calls",      label: "Calls",       roles: ["agent", "admin", "super_admin"] },
   { id: "kb",         label: "Knowledge Base", roles: ["admin", "super_admin"] },
@@ -124,7 +125,8 @@ function showScreen(id) {
   const loaders = {
     dashboard: loadDashboard, tickets: loadTickets, calls: loadCalls,
     kb: loadKb,
-    users: () => Promise.all([loadUsers(), state.me.role === "super_admin" ? loadWorkspaces() : Promise.resolve()]),
+    chat: () => {},
+    users: () => Promise.all([loadUsers(), state.me.role === "super_admin" ? Promise.all([loadWorkspaces(), loadHierarchy()]) : Promise.resolve()]),
     callcenter: () => {},
   };
   (loaders[id] || (() => {}))().catch(e => toast(e.message, true));
@@ -306,6 +308,33 @@ async function setRole(userId, role) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ---------------- RAG chat ---------------- */
+
+async function sendChat() {
+  const q = document.getElementById("chat-question").value.trim();
+  if (!q) return toast("Type a question first", true);
+  const cat = document.getElementById("chat-category").value;
+  const log = document.getElementById("chat-log");
+  log.textContent += `\n\n🧑 You: ${q}\n⏳ thinking…`;
+  log.scrollTop = log.scrollHeight;
+  try {
+    const res = await api("/kb/chat", { method: "POST", json: {
+      question: q, ...(cat ? { category: cat } : {}),
+    }});
+    const cites = (res.citations || [])
+      .map(c => `[${c.index}] ${c.source} (score ${c.score})`)
+      .join("\n");
+    log.textContent += `\n\n🤖 Assistant:\n${res.answer}` +
+      (res.citations?.length ? `\n\n📚 Citations:\n${cites}` : "\n\n(no KB sources matched)") +
+      `\n— scope: ${res.workspace_scope}, chunks used: ${res.chunks_used}`;
+    document.getElementById("chat-question").value = "";
+    log.scrollTop = log.scrollHeight;
+  } catch (e) {
+    log.textContent = log.textContent.replace("⏳ thinking…", `❌ ${e.message}`);
+    toast(e.message, true);
+  }
+}
+
 /* ---------------- workspaces (super_admin) ---------------- */
 
 async function loadWorkspaces() {
@@ -317,6 +346,21 @@ async function loadWorkspaces() {
     { h: "Members",  f: r => `${r.members ?? 0} (${r.admins ?? 0} admin)` },
     { h: "ID",       f: r => `<span class="muted">${esc(r.id).slice(0, 13)}…</span>` },
   ]);
+}
+
+async function loadHierarchy() {
+  const tree = await api("/admin/workspaces/hierarchy/tree");
+  const lines = [];
+  for (const ws of tree) {
+    lines.push(`🏢 ${ws.workspace.name} (${ws.workspace.slug}, ${ws.workspace.plan}) — id ${ws.workspace.id}`);
+    if (!ws.admins.length && !ws.agents.length) { lines.push(`   └─ (no members)`); continue; }
+    for (const a of ws.admins) {
+      lines.push(`   ├─ 👔 ADMIN  ${a.name ?? "?"} <${a.email}>`);
+      // agents listed after admins belong to the same workspace
+    }
+    for (const u of ws.agents) lines.push(`   ├─ 🙋 agent  ${u.name ?? "?"} <${u.email}>`);
+  }
+  document.getElementById("hierarchy-tree").textContent = lines.join("\n") || "(empty)";
 }
 
 async function createWorkspace() {

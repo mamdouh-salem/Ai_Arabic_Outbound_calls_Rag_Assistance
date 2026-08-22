@@ -23,14 +23,18 @@ def generate_answer(
 ) -> dict:
     """Run the full RAG loop: retrieve -> build context -> generate.
 
-    Returns {"answer": str, "sources": list[str], "chunks_used": int}.
-    workspace_id scopes retrieval to one tenant — always pass it in
-    multi-tenant contexts.
+    Returns {"answer", "sources", "chunks_used", "citations"} where citations
+    carry per-chunk provenance (id, source, score, snippet) for UI rendering.
     """
     settings = get_settings()
     chunks = hybrid_search(question, category=category, workspace_id=workspace_id)
     if not chunks:
-        return {"answer": NO_CONTEXT_FALLBACK, "sources": [], "chunks_used": 0}
+        return {
+            "answer": NO_CONTEXT_FALLBACK,
+            "sources": [],
+            "chunks_used": 0,
+            "citations": [],
+        }
 
     context = build_context(chunks)
     messages = build_messages(question=question, context=context)
@@ -41,8 +45,21 @@ def generate_answer(
         temperature=settings.generation_temperature,
     )
 
+    citations = [
+        {
+            # [1]-style index matching the bracketed markers the prompt asks
+            # the model to emit inside the answer text
+            "index": i,
+            "id": c.id,
+            "source": c.metadata.get("source", "unknown"),
+            "score": round(c.rrf_score, 4),
+            "snippet": c.content[:180],
+        }
+        for i, c in enumerate(chunks, start=1)
+    ]
     return {
         "answer": answer,
         "sources": sources_used(chunks),
         "chunks_used": len(chunks),
+        "citations": citations,
     }

@@ -95,8 +95,8 @@ def _run_chat_openai(messages: list[dict], *, max_new_tokens: int, temperature: 
     return response.content.strip()
 
 
-@lru_cache(maxsize=1)
-def _get_gemini_client():
+@lru_cache(maxsize=8)
+def _get_gemini_client(max_new_tokens: int = 512, temperature: float = 0.2):
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     settings = get_settings()
@@ -109,6 +109,11 @@ def _get_gemini_client():
         # answer — that's what was truncating responses. "low" is also just
         # the right choice for a latency-critical in-call agent regardless.
         thinking_level="low",
+        # Bind sampling params at CONSTRUCTION time: recent langchain-google-
+        # genai builds reject any per-invoke kwarg (version skew with the
+        # underlying GenerativeServiceClient signature).
+        max_output_tokens=max_new_tokens,
+        temperature=temperature,
     )
 
 
@@ -130,12 +135,8 @@ def _extract_text(content) -> str:
 
 
 def _run_chat_gemini(messages: list[dict], *, max_new_tokens: int, temperature: float) -> str:
-    client = _get_gemini_client()
-    response = client.invoke(
-        messages,
-        max_output_tokens=max_new_tokens,
-        temperature=temperature,
-    )
+    client = _get_gemini_client(max_new_tokens=max_new_tokens, temperature=temperature)
+    response = client.invoke(messages)
     return _extract_text(response.content)
 
 

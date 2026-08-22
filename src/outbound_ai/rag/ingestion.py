@@ -24,18 +24,35 @@ CHUNK_MAX_CHARS = 1200
 CHUNK_OVERLAP = 150
 
 
-def extract_text_from_pdf(data: bytes) -> str:
-    """Best-effort PDF text extraction via pypdf (declared optional extra)."""
+def extract_text_from_docx(data: bytes) -> str:
+    """Best-effort DOCX extraction via python-docx (paragraphs only)."""
     try:
-        from pypdf import PdfReader
+        import docx  # python-docx
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "PDF upload requires the 'pypdf' package (pip install pypdf)."
+            "DOCX upload requires the 'python-docx' package."
         ) from exc
     import io
 
-    reader = PdfReader(io.BytesIO(data))
-    return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+    document = docx.Document(io.BytesIO(data))
+    return "\n\n".join(p.text for p in document.paragraphs if p.text.strip())
+
+
+def extract_text(filename: str, data: bytes) -> str:
+    """Dispatch on extension; unknown types are attempted as UTF-8 text and
+    rejected if they decode as binary garbage."""
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        return extract_text_from_pdf(data)
+    if lower.endswith(".docx"):
+        return extract_text_from_docx(data)
+    text = data.decode("utf-8", errors="replace")
+    # Heuristic binary guard: replacement chars signal undecodable content
+    if text.count("\ufffd") > len(text) * 0.05:
+        raise ValueError(
+            f"'{filename}' does not look like a supported text/PDF/DOCX document."
+        )
+    return text
 
 
 def chunk_text(

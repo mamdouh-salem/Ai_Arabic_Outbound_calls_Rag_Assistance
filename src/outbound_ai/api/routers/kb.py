@@ -1,25 +1,25 @@
-"""KB document management API — admin/super_admin only.
+"""KB management + RAG chat API.
 
-POST   /kb/documents            upload a document (multipart file or JSON text)
-GET    /kb/documents            list documents in a workspace (chunk counts)
-DELETE /kb/documents/{source}   delete every chunk of one document
-
-Agents are rejected at the dependency layer before any handler runs.
+POST   /kb/documents            upload a document (admin/super_admin)
+GET    /kb/documents            list documents in a workspace (admin/super_admin)
+DELETE /kb/documents/{source}   delete every chunk of one document (admin+)
+POST   /kb/chat                 RAG assistant with citations (any authenticated role)
 """
 from __future__ import annotations
 
 import asyncio
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 
 from outbound_ai.auth.dependencies import AdminOrAbove
+from outbound_ai.auth.dependencies import get_current_user
 from outbound_ai.auth.models import AuthContext
 from outbound_ai.db.service_client import get_service_client
-from outbound_ai.rag.ingestion import extract_text_from_pdf, ingest_document
+from outbound_ai.rag.ingestion import extract_text, ingest_document
+from outbound_ai.rag.generation import generate_answer
 
 router = APIRouter(prefix="/kb", tags=["kb"])
-
-ALLOWED_TEXT_SUFFIXES = {".txt", ".md", ".markdown"}
 
 
 def _require_workspace(ctx: AuthContext) -> str:
@@ -53,16 +53,16 @@ async def upload_document(
 
     if file is not None and file.filename:
         data = await file.read()
-        suffix = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-        if suffix == ".pdf":
-            text = await asyncio.to_thread(extract_text_from_pdf, data)
-        elif suffix in ALLOWED_TEXT_SUFFIXES:
-            text = data.decode("utf-8", errors="replace")
-        else:
+        try:
+            text = await asyncio.to_thread(extract_text, file.filename, data)
+        except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"Unsupported file type '{suffix}'. Use .txt, .md or .pdf, or send raw content.",
-            )
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
+            ) from exc
     elif content:
         text = content
     else:
@@ -131,3 +131,38 @@ async def delete_document(source_name: str, ctx: AdminOrAbove) -> dict:
             detail=f"No document named '{source_name}' in this workspace.",
         )
     return {"status": "deleted", "source": source_name, "chunks_deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# RAG assistant (the CSR co-pilot) — any authenticated user
+# ---------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    question: str = Field(min_length=2, max_length=2000)
+    category: str | None = None
+
+
+@router.post("/chat")
+async def rag_chat(body: ChatRequest, ctx: AuthContext = Depends(get_current_user)) -> dict:
+    """Ask the knowledge base a question; get a grounded Arabic answer with
+    citations. Agents use this as their live-call co-pilot.
+
+    Visibility follows the same rules as data endpoints: agents query only
+    their workspace; admins their own; super admins everything (or narrowed
+    via X-Workspace-Id)."""
+    try:
+        workspace_id = ctx.assert_workspace()
+        scope = str(workspace_id)
+    except ValueError:
+        scope = None  # platform-wide super_admin
+
+    result = await asyncio.to_thread(
+        generate_answer, body.question, body.category, scope
+    )
+    return {
+        "answer": result["answer"],
+        "citations": result["citations"],
+        "sources": result["sources"],
+        "chunks_used": result["chunks_used"],
+        "workspace_scope": scope or "ALL",
+    }

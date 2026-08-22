@@ -50,8 +50,9 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "tiktoken>=0.8.0",
     "sentence-transformers>=3.3.0",
-    # PDF text extraction for KB document upload (rag/ingestion.py)
+    # PDF/DOCX text extraction for KB document upload (rag/ingestion.py)
     "pypdf>=4.0.0",
+    "python-docx>=1.1.0",
     # --- Telephony (Vonage) ---
     "vonage>=4.8.2",
 

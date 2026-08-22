@@ -97,3 +97,47 @@ async def add_member(
     except Exception as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Membership refused: {exc}") from exc
     return res.data[0]
+
+
+@router.get("/hierarchy/tree")
+async def hierarchy_tree(
+    ctx: Annotated[AuthContext, Depends(require_super_admin)],
+) -> list[dict]:
+    """Every workspace with its admins and the users beneath them — the
+    platform org chart for super admins."""
+    sb = get_service_client()
+    workspaces = (sb.table("workspaces").select("id, name, slug, plan").execute().data) or []
+    members = (
+        sb.table("workspace_members")
+        .select("workspace_id, user_id, role")
+        .execute().data
+    ) or []
+    profiles = {
+        u["id"]: u
+        for u in (
+            sb.table("users").select("id, email, display_name, platform_role").execute().data
+            or []
+        )
+    }
+
+    tree: dict[str, dict] = {}
+    for m in members:
+        ws = tree.setdefault(m["workspace_id"], {"admins": [], "agents": []})
+        profile = profiles.get(m["user_id"], {"email": m["user_id"], "display_name": "?"})
+        entry = {
+            "user_id": m["user_id"],
+            "email": profile.get("email"),
+            "name": profile.get("display_name"),
+            "workspace_role": m["role"],
+        }
+        bucket = "admins" if m["role"] == "admin" else "agents"
+        ws[bucket].append(entry)
+
+    return [
+        {
+            "workspace": w,
+            "admins": tree.get(w["id"], {}).get("admins", []),
+            "agents": tree.get(w["id"], {}).get("agents", []),
+        }
+        for w in workspaces
+    ]
