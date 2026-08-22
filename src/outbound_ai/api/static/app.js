@@ -199,13 +199,25 @@ function renderTable(elId, rows, cols) {
 
 async function loadTickets() {
   const rows = await api("/tickets");
+  const canCall = ["admin", "super_admin"].includes(state.me.role);
   renderTable("tickets-table", rows, [
     { h: "ID",        f: r => esc(r.id).slice(0, 8) },
     { h: "Title",     f: r => `<span dir="rtl">${esc(r.title)}</span>` },
     { h: "Status",    f: r => esc(r.status ?? "-") },
     { h: "Category",  f: r => esc(r.kb_category ?? "-") },
     { h: "Assigned",  f: r => r.assigned_to ? esc(r.assigned_to.slice(0, 8)) : '<span class="muted">unassigned</span>' },
+    ...(canCall ? [{ h: "", f: r =>
+      `<button class="btn primary sm" onclick="callTicket('${esc(r.id)}')">📞 Call</button>` }] : []),
   ]);
+}
+
+async function callTicket(ticketId) {
+  if (!confirm("Place the AI call to this ticket's customer now?")) return;
+  toast("📞 Dialing…");
+  try {
+    const res = await api(`/tickets/${ticketId}/call`, { method: "POST" });
+    toast(`Call placed to ${res.phone} — pick up!`);
+  } catch (e) { toast(e.message, true); }
 }
 
 async function loadCalls() {

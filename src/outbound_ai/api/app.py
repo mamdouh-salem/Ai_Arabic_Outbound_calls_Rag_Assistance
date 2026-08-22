@@ -18,6 +18,7 @@ from supabase import create_client
 
 from outbound_ai.agents import intent_classifier, kb_assist, reporting, routing
 from outbound_ai.api.routers import admin_users, data, kb as kb_docs, workspaces
+from outbound_ai.api.routers.data import visible_ticket_filters
 from outbound_ai.auth import AuthContext, get_current_user
 from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
 from outbound_ai.config.settings import get_settings
@@ -95,7 +96,10 @@ async def speak(text: str) -> list[dict]:
 
                 await asyncio.to_thread(_write)
             url = f"{_base()}/audio/{name}"
-            return [{"action": "stream", "stream": [{"url": url, "loop": 1}]}]
+            # NOTE: Vonage NCCO stream action takes a plain streamUrl list —
+            # the nested {"url": ...} object form is rejected with 400
+            # ("Unexpected token START_OBJECT ... NCCOAction").
+            return [{"action": "stream", "streamUrl": [url], "bargeIn": False}]
         except Exception as exc:
             log.warning("elevenlabs_synthesis_failed", error=str(exc))
     return [{"action": "talk", "text": text, "language": "ar"}]
@@ -297,19 +301,15 @@ async def _save(
         log.error("supabase_save_failed", error=str(e))
 
 
-@app.post("/start-call")
-async def start_call(request: Request, ctx: AdminOrAbove):
-    """Place a live outbound call. admin/super_admin only — dialing costs
-    money and is a campaign-level action."""
-    b = await request.json()
-    log.info("start_call", by_user=str(ctx.user_id), to=b.get("phone"))
+async def _place_ticket_call(
+    *, phone: str, ticket_id: str, title: str, category: str, ctx
+) -> dict:
+    """Shared call-placement logic for manual and one-click ticket calls."""
     if not settings.vonage_from_number:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="VONAGE_FROM_NUMBER is not configured in .env — add your Vonage "
-                   "virtual number (Dashboard → Numbers) and restart the API.",
+            detail="VONAGE_FROM_NUMBER is not configured in .env.",
         )
-    title = b.get("ticket_title", "شكوتك")
     greeting = (
         f"السلام عليكم، معك المساعد الآلي من خدمة العملاء. "
         f"أنا بكلمك دلوقتي بخصوص المشكلة بتاعتك، وهي {title}. "
@@ -317,13 +317,13 @@ async def start_call(request: Request, ctx: AdminOrAbove):
     )
     ncco = [await speak(greeting)] + [_rec(1), *_hold()]
     session, conv = await _adapter.place_call_with_ncco(
-        to_number=b["phone"], from_number=settings.vonage_from_number.lstrip("+"), ncco=ncco)
+        to_number=phone, from_number=settings.vonage_from_number.lstrip("+"), ncco=ncco)
     CALL_STATE[conv] = {
         "conv": conv,
         "call_id": session.call_id,
-        "ticket_id": b.get("ticket_id", ""),
+        "ticket_id": str(ticket_id) if ticket_id else "",
         "ticket_title": title,
-        "category": b.get("category", "billing"),
+        "category": category or "billing",
         "transcript": [],
         "turns": [],
         "stage": 1,
@@ -331,7 +331,59 @@ async def start_call(request: Request, ctx: AdminOrAbove):
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     log.info("call_started", call_id=session.call_id, conv=conv)
-    return {"call_id": session.call_id, "conversation_uuid": conv}
+    return {"status": "calling", "call_id": session.call_id,
+            "conversation_uuid": conv, "phone": phone}
+
+
+@app.post("/start-call")
+async def start_call(request: Request, ctx: AdminOrAbove):
+    """Place a live outbound call. admin/super_admin only — dialing costs
+    money and is a campaign-level action."""
+    b = await request.json()
+    log.info("start_call", by_user=str(ctx.user_id), to=b.get("phone"))
+    return await _place_ticket_call(
+        phone=b["phone"],
+        ticket_id=b.get("ticket_id", ""),
+        title=b.get("ticket_title", "شكوتك"),
+        category=b.get("category", "billing"),
+        ctx=ctx,
+    )
+
+
+@app.post("/tickets/{ticket_id}/call")
+async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAbove):
+    """One-click dial: pulls the ticket + its customer's phone automatically.
+    Visibility rules apply (agents cannot reach this route; admins only their
+    workspace; super admins any workspace via X-Workspace-Id)."""
+    from outbound_ai.db.service_client import get_service_client
+
+    sb = get_service_client()
+    q = (sb.table("tickets")
+           .select("id, title, kb_category, customer_id, customers(phone)")
+           .eq("id", ticket_id))
+    for col, val in (visible_ticket_filters(ctx) or {}).items():
+        q = q.eq(col, val)
+    res = q.limit(1).execute()
+    rows = res.data or []
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "Ticket not found in your visible scope.")
+    ticket = rows[0]
+    # Supabase nested select returns the joined row under the table name
+    joined = ticket.get("customers") or {}
+    phone = joined.get("phone")
+    if not phone:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "The customer linked to this ticket has no phone number on file.")
+
+    log.info("one_click_call", by_user=str(ctx.user_id), ticket=ticket_id, to=phone)
+    return await _place_ticket_call(
+        phone=phone,
+        ticket_id=ticket["id"],
+        title=ticket.get("title") or "شكوتك",
+        category=ticket.get("kb_category") or "billing",
+        ctx=ctx,
+    )
 
 
 @app.post("/telephony/vonage/event")
