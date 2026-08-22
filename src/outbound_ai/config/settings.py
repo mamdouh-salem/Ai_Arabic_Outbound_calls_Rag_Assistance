@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     vonage_api_secret: SecretStr | None = None
     vonage_application_id: str = ""
     vonage_private_key_path: Path = Path("./vonage_private.key")
+    # The Vonage virtual number calls are placed FROM — must exist on the
+    # account AND be linked to the voice application (Dashboard → Numbers).
+    vonage_from_number: str = ""
     public_webhook_base_url: str = ""
 
     # ------------------------------------------------------------------------ App

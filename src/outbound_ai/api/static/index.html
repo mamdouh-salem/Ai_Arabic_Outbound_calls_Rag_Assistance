@@ -13,12 +13,19 @@
   <form class="login-card" onsubmit="return doLogin(event)">
     <div class="brand-big">🎙️ Outbound AI</div>
     <div class="brand-sub">Arabic AI-powered outbound call console</div>
+
+    <div id="signup-fields" class="hidden">
+      <label>Display name</label>
+      <input id="signup-name" type="text" placeholder="Ahmed Hassan">
+    </div>
     <label>Email</label>
     <input id="login-email" type="email" required autocomplete="username" placeholder="you@company.com">
     <label>Password</label>
-    <input id="login-password" type="password" required autocomplete="current-password" placeholder="••••••••">
+    <input id="login-password" type="password" required autocomplete="current-password"
+           placeholder="••••••••" minlength="8">
     <button class="btn primary block" type="submit" id="login-btn">Sign in</button>
     <div id="login-error" class="error-box hidden"></div>
+    <a href="#" id="toggle-signup" class="toggle-link">No account yet? Create one →</a>
   </form>
 </div>
 
@@ -114,6 +121,24 @@
         <div class="panel">
           <h3>All users visible to you</h3>
           <table id="users-table" class="tbl"></table>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-workspaces">
+        <h3>Workspaces <span class="badge danger">super admin only</span></h3>
+        <div class="grid-2">
+          <div>
+            <table id="workspaces-table" class="tbl"></table>
+          </div>
+          <div>
+            <label>Workspace name</label>
+            <input id="nw-name" placeholder="Acme Telecom">
+            <label>Slug (URL-safe)</label>
+            <input id="nw-slug" placeholder="acme-telecom">
+            <label>Plan</label>
+            <select id="nw-plan"><option>free</option><option>pro</option><option>enterprise</option></select>
+            <button class="btn primary" onclick="createWorkspace()">Create workspace</button>
+          </div>
         </div>
       </div>
     </section>

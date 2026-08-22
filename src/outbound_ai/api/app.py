@@ -7,15 +7,16 @@ from typing import Annotated
 import google.generativeai as genai
 import httpx
 import structlog
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import AIMessage, HumanMessage
+from pydantic import BaseModel, EmailStr, Field
 from supabase import create_client
 
 from outbound_ai.agents import intent_classifier, kb_assist, reporting, routing
-from outbound_ai.api.routers import admin_users, data, kb as kb_docs
+from outbound_ai.api.routers import admin_users, data, kb as kb_docs, workspaces
 from outbound_ai.auth import AuthContext, get_current_user
 from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
 from outbound_ai.config.settings import get_settings
@@ -57,6 +58,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # ---------------------------------------------------------------------------
 app.include_router(kb_docs.router)
 app.include_router(admin_users.router)
+app.include_router(workspaces.router)
 app.include_router(data.router)
 
 
@@ -98,6 +100,55 @@ async def public_frontend_config():
         "supabase_url": settings.supabase_url,
         "anon_key": settings.supabase_anon_key.get_secret_value() if settings.supabase_anon_key else "",
     }
+
+
+# ---------------------------------------------------------------------------
+# Public self sign-up (agent role, default workspace)
+# ---------------------------------------------------------------------------
+
+class SignUpRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+    display_name: str = Field(min_length=1, max_length=120)
+
+@app.post("/auth/signup", tags=["auth"], status_code=status.HTTP_201_CREATED)
+async def sign_up(body: SignUpRequest):
+    """Open registration — new users join the 'default' workspace as agents.
+    Admins promote them later; super admins move them between workspaces."""
+    from outbound_ai.db.service_client import get_service_client
+
+    sb = get_service_client()
+    ws = (
+        sb.table("workspaces").select("id").eq("slug", "default").limit(1).execute().data
+    )
+    if not ws:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "No default workspace exists yet.")
+    try:
+        created = sb.auth.admin.create_user({
+            "email": body.email,
+            "password": body.password,
+            "email_confirm": True,
+            "user_metadata": {"display_name": body.display_name},
+        })
+    except Exception as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Sign-up refused: {exc}") from exc
+    uid = created.user.id
+    try:
+        sb.table("users").insert({
+            "id": uid, "email": body.email,
+            "display_name": body.display_name, "platform_role": "agent",
+        }).execute()
+        sb.table("workspace_members").insert({
+            "workspace_id": ws[0]["id"], "user_id": uid, "role": "agent",
+        }).execute()
+    except Exception as exc:
+        log.error("signup_profile_write_failed", user=uid, error=str(exc))
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Account created but profile setup failed: {exc}",
+        ) from exc
+    return {"status": "created", "user_id": uid, "role": "agent",
+            "workspace_id": ws[0]["id"]}
 
 
 
@@ -144,13 +195,19 @@ async def start_call(request: Request, ctx: AdminOrAbove):
     money and is a campaign-level action."""
     b = await request.json()
     log.info("start_call", by_user=str(ctx.user_id), to=b.get("phone"))
+    if not settings.vonage_from_number:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VONAGE_FROM_NUMBER is not configured in .env — add your Vonage "
+                   "virtual number (Dashboard → Numbers) and restart the API.",
+        )
     title = b.get("ticket_title", "شكوتك")
     greeting = (f"السلام عليكم، أنا المساعد الآلي من خدمة العملاء. "
                 f"بكلمك بخصوص الشكوى بتاعتك عن {title}. "
                 f"عايز أتطمن، المشكلة اتحلت ولا لسه؟ اتكلم بعد الصفارة.")
     ncco = [{"action": "talk", "text": greeting, "language": "ar"}, _rec(1), *_hold()]
     session, conv = await _adapter.place_call_with_ncco(
-        to_number=b["phone"], from_number="12345678901", ncco=ncco)
+        to_number=b["phone"], from_number=settings.vonage_from_number.lstrip("+"), ncco=ncco)
     CALL_STATE[conv] = {"call_id": session.call_id, "ticket_id": b.get("ticket_id", ""),
                         "ticket_title": title, "category": b.get("category", "billing"),
                         "transcript": [], "turns": []}

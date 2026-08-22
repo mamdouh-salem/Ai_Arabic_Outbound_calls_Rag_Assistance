@@ -45,15 +45,37 @@ async function api(path, opts = {}) {
 
 /* ---------------- auth ---------------- */
 
+let signupMode = false;
+
+function toggleSignup(ev) {
+  ev.preventDefault();
+  signupMode = !signupMode;
+  document.getElementById("signup-fields").classList.toggle("hidden", !signupMode);
+  document.getElementById("login-btn").textContent = signupMode ? "Create account" : "Sign in";
+  document.getElementById("toggle-signup").textContent =
+    signupMode ? "← Already have an account? Sign in" : "No account yet? Create one →";
+}
+
 async function doLogin(ev) {
   ev.preventDefault();
   const btn = document.getElementById("login-btn");
   const errBox = document.getElementById("login-error");
-  btn.disabled = true; btn.textContent = "Signing in…";
+  btn.disabled = true;
   errBox.classList.add("hidden");
   try {
     const email = document.getElementById("login-email").value.trim();
     const password = document.getElementById("login-password").value;
+
+    if (signupMode) {
+      const name = document.getElementById("signup-name").value.trim();
+      if (!name) throw new Error("Display name is required");
+      const r = await fetch("/auth/signup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, display_name: name }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail || "Sign-up failed");
+    }
+
     const res = await fetch(`${state.cfg.supabase_url}/auth/v1/token?grant_type=password`, {
       method: "POST",
       headers: { apikey: state.cfg.anon_key, "Content-Type": "application/json" },
@@ -64,11 +86,13 @@ async function doLogin(ev) {
     state.token = data.access_token;
     localStorage.setItem("obai_token", state.token);
     await enterApp();
+    toast(signupMode ? "Welcome! Your agent account is ready 🎉" : "Signed in ✅");
   } catch (e) {
     errBox.textContent = e.message;
     errBox.classList.remove("hidden");
   } finally {
-    btn.disabled = false; btn.textContent = "Sign in";
+    btn.disabled = false;
+    btn.textContent = signupMode ? "Create account" : "Sign in";
   }
   return false;
 }
@@ -99,7 +123,9 @@ function showScreen(id) {
     b.classList.toggle("active", b.dataset.screen === id));
   const loaders = {
     dashboard: loadDashboard, tickets: loadTickets, calls: loadCalls,
-    kb: loadKb, users: loadUsers, callcenter: () => {},
+    kb: loadKb,
+    users: () => Promise.all([loadUsers(), state.me.role === "super_admin" ? loadWorkspaces() : Promise.resolve()]),
+    callcenter: () => {},
   };
   (loaders[id] || (() => {}))().catch(e => toast(e.message, true));
 }
@@ -280,6 +306,35 @@ async function setRole(userId, role) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ---------------- workspaces (super_admin) ---------------- */
+
+async function loadWorkspaces() {
+  const rows = await api("/admin/workspaces");
+  renderTable("workspaces-table", rows, [
+    { h: "Name",     f: r => esc(r.name) },
+    { h: "Slug",     f: r => `<code>${esc(r.slug)}</code>` },
+    { h: "Plan",     f: r => esc(r.plan) },
+    { h: "Members",  f: r => `${r.members ?? 0} (${r.admins ?? 0} admin)` },
+    { h: "ID",       f: r => `<span class="muted">${esc(r.id).slice(0, 13)}…</span>` },
+  ]);
+}
+
+async function createWorkspace() {
+  const name = document.getElementById("nw-name").value.trim();
+  const slug = document.getElementById("nw-slug").value.trim().toLowerCase();
+  if (!name || !slug) return toast("Name and slug are required", true);
+  try {
+    await api("/admin/workspaces", {
+      method: "POST",
+      json: { name, slug, plan: document.getElementById("nw-plan").value },
+    });
+    toast(`Workspace "${name}" created ✅`);
+    document.getElementById("nw-name").value = "";
+    document.getElementById("nw-slug").value = "";
+    loadWorkspaces();
+  } catch (e) { toast(e.message, true); }
+}
+
 /* ---------------- call center ---------------- */
 
 async function startCall() {
@@ -309,6 +364,7 @@ async function startCall() {
 
   document.getElementById("login-screen").classList.remove("hidden");
   document.querySelector("form.login-card").onsubmit = doLogin;
+  document.getElementById("toggle-signup").onclick = toggleSignup;
 
   if (state.token) {
     try { await enterApp(); }
