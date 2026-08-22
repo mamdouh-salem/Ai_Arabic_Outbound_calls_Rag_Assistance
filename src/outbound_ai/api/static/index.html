@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Outbound AI — Arabic Call Agent Console</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ======================= LOGIN SCREEN ======================= -->
+<div id="login-screen" class="login-wrap hidden">
+  <form class="login-card" onsubmit="return doLogin(event)">
+    <div class="brand-big">🎙️ Outbound AI</div>
+    <div class="brand-sub">Arabic AI-powered outbound call console</div>
+    <label>Email</label>
+    <input id="login-email" type="email" required autocomplete="username" placeholder="you@company.com">
+    <label>Password</label>
+    <input id="login-password" type="password" required autocomplete="current-password" placeholder="••••••••">
+    <button class="btn primary block" type="submit" id="login-btn">Sign in</button>
+    <div id="login-error" class="error-box hidden"></div>
+  </form>
+</div>
+
+<!-- ======================= APP SHELL ======================= -->
+<div id="app-shell" class="hidden">
+  <header class="topbar">
+    <div class="brand">🎙️ <b>Outbound&nbsp;AI</b></div>
+    <nav id="nav-tabs"></nav>
+    <div class="user-chip">
+      <span id="chip-name" class="muted"></span>
+      <span id="chip-role" class="badge"></span>
+      <button class="btn ghost sm" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <!-- super_admin workspace scoping bar -->
+  <div id="ws-bar" class="ws-bar hidden">
+    <span>Workspace scope (super admin):</span>
+    <input id="ws-input" size="40" placeholder="leave empty = all workspaces">
+    <button class="btn sm" onclick="applyWorkspace()">Apply</button>
+    <span id="ws-hint" class="muted"></span>
+  </div>
+
+  <main class="content">
+
+    <!-- ---------- DASHBOARD ---------- -->
+    <section id="screen-dashboard" class="screen">
+      <h2>Dashboard</h2>
+      <div class="cards" id="dash-cards"></div>
+      <div class="panel"><h3>My identity</h3><pre id="identity-json" class="code"></pre></div>
+    </section>
+
+    <!-- ---------- TICKETS ---------- -->
+    <section id="screen-tickets" class="screen hidden">
+      <h2>Tickets</h2>
+      <p class="muted">agent → only tickets assigned to you · admin → whole workspace · super admin → everything</p>
+      <div class="panel"><table id="tickets-table" class="tbl"></table></div>
+    </section>
+
+    <!-- ---------- CALLS ---------- -->
+    <section id="screen-calls" class="screen hidden">
+      <h2>Calls</h2>
+      <p class="muted">Same visibility rules as tickets.</p>
+      <div class="panel"><table id="calls-table" class="tbl"></table></div>
+    </section>
+
+    <!-- ---------- KNOWLEDGE BASE ---------- -->
+    <section id="screen-kb" class="screen hidden">
+      <h2>Knowledge Base</h2>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Upload document</h3>
+          <label>Category *</label>
+          <input id="kb-category" placeholder="billing / routers / accounts ...">
+          <label>Title (defaults to filename)</label>
+          <input id="kb-title" placeholder="SOP_Billing_06">
+          <label>File (.txt .md .pdf) — or paste text below</label>
+          <input id="kb-file" type="file" accept=".txt,.md,.markdown,.pdf">
+          <label>…or raw text</label>
+          <textarea id="kb-content" rows="6" dir="rtl" placeholder="الصق النص العربي هنا..."></textarea>
+          <button class="btn primary" onclick="kbUpload()">Upload &amp; Ingest</button>
+        </div>
+        <div class="panel">
+          <h3>Documents in workspace</h3>
+          <table id="kb-table" class="tbl"></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- USERS ---------- -->
+    <section id="screen-users" class="screen hidden">
+      <h2>User Management</h2>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Create user <span class="badge danger">super admin only</span></h3>
+          <label>Email</label>
+          <input id="nu-email" type="email" placeholder="newuser@company.com">
+          <label>Display name</label>
+          <input id="nu-name" placeholder="Ahmed Hassan">
+          <label>Role</label>
+          <select id="nu-role">
+            <option value="agent">agent</option>
+            <option value="admin">admin</option>
+            <option value="super_admin">super_admin</option>
+          </select>
+          <label>Workspace ID <span class="muted">(required for admin/agent)</span></label>
+          <input id="nu-workspace" placeholder="aaaaaaaa-0000-0000-0000-000000000001">
+          <label>Password <span class="muted">(empty = auto-generate)</span></label>
+          <input id="nu-password" type="text" placeholder="min 8 chars">
+          <button class="btn primary" onclick="createUser()">Create account</button>
+          <pre id="nu-result" class="code highlight hidden"></pre>
+        </div>
+        <div class="panel">
+          <h3>All users visible to you</h3>
+          <table id="users-table" class="tbl"></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- CALL CENTER ---------- -->
+    <section id="screen-callcenter" class="screen hidden">
+      <h2>Call Center</h2>
+      <div class="panel narrow">
+        <h3>Place outbound call <span class="badge warn">Vonage live dial 📞</span></h3>
+        <label>Phone number *</label>
+        <input id="cc-phone" placeholder="+201211497586">
+        <label>Ticket ID</label>
+        <input id="cc-ticket" placeholder="T-1001">
+        <label>Ticket title (spoken in greeting)</label>
+        <input id="cc-title" dir="rtl" placeholder="الانترنت مش شغال">
+        <label>KB category</label>
+        <select id="cc-category">
+          <option>routers</option><option>billing</option><option>accounts</option>
+        </select>
+        <button class="btn primary" onclick="startCall()">📞 Start call</button>
+        <pre id="cc-result" class="code highlight hidden"></pre>
+      </div>
+    </section>
+
+  </main>
+  <div id="toast" class="toast hidden"></div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

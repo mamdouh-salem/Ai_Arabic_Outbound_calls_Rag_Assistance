@@ -9,7 +9,8 @@ import httpx
 import structlog
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import AIMessage, HumanMessage
 from supabase import create_client
 
@@ -48,6 +49,9 @@ _adapter = VonageTelephonyAdapter()
 CALL_STATE = {}
 HUMAN_AGENT_NUMBER = "+201211497586"
 
+# Front-end static assets (SPA served by this API — same origin, no CORS pain)
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
 # ---------------------------------------------------------------------------
 # Routers (auth, KB management, user management, data visibility)
 # ---------------------------------------------------------------------------
@@ -83,6 +87,16 @@ async def health_check_auth(ctx: CurrentUser):
         "workspace_id": str(ctx.workspace_id) if ctx.workspace_id else None,
         "role": ctx.role.value,
         "email": ctx.email,
+    }
+
+
+@app.get("/api/config", tags=["ops"])
+async def public_frontend_config():
+    """Values the browser SPA needs before login. The anon key is public by
+    design (it only allows unauthenticated auth endpoints + RLS-guarded reads)."""
+    return {
+        "supabase_url": settings.supabase_url,
+        "anon_key": settings.supabase_anon_key.get_secret_value() if settings.supabase_anon_key else "",
     }
 
 
@@ -125,8 +139,11 @@ def _save(rec):
 
 
 @app.post("/start-call")
-async def start_call(request: Request):
+async def start_call(request: Request, ctx: AdminOrAbove):
+    """Place a live outbound call. admin/super_admin only — dialing costs
+    money and is a campaign-level action."""
     b = await request.json()
+    log.info("start_call", by_user=str(ctx.user_id), to=b.get("phone"))
     title = b.get("ticket_title", "شكوتك")
     greeting = (f"السلام عليكم، أنا المساعد الآلي من خدمة العملاء. "
                 f"بكلمك بخصوص الشكوى بتاعتك عن {title}. "
@@ -232,3 +249,15 @@ async def recording(request: Request):
            "escalation_brief": esc["escalation_brief"],
            "call_outcome": rep["call_outcome"], "call_summary": rep["call_summary"]})
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Front-end SPA — keep LAST so API routes take precedence over the mounts
+# ---------------------------------------------------------------------------
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    """The console UI — login screen, then role-aware dashboard."""
+    return FileResponse(STATIC_DIR / "index.html")
