@@ -211,7 +211,10 @@ async function loadTickets() {
 async function loadCalls() {
   const rows = await api("/calls");
   renderTable("calls-table", rows, [
-    { h: "Call ID",     f: r => esc((r.vonage_call_id ?? r.id ?? "").toString().slice(0, 12)) },
+    { h: "Date",        f: r => r.started_at ? new Date(r.started_at).toLocaleString() : "-" },
+    { h: "Duration",    f: r => r.duration_seconds != null
+                            ? `${Math.floor(r.duration_seconds / 60)}m ${r.duration_seconds % 60}s`
+                            : "-" },
     { h: "Outcome",     f: r => esc(r.call_outcome ?? "-") },
     { h: "Intent",      f: r => esc(r.intent ?? "-") },
     { h: "KB answer?",  f: r => r.kb_answer_given ? "✅" : "—" },

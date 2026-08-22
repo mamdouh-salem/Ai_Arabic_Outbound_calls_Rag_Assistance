@@ -1,4 +1,5 @@
 """Multi-turn Arabic outbound call agent + reporting."""
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,9 +50,65 @@ app.add_middleware(
 _adapter = VonageTelephonyAdapter()
 CALL_STATE = {}
 HUMAN_AGENT_NUMBER = "+201211497586"
+DEFAULT_WORKSPACE_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 
 # Front-end static assets (SPA served by this API — same origin, no CORS pain)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# ---------------------------------------------------------------------------
+# Live-call speech: prefer ElevenLabs (Egyptian voice) served as a WAV the
+# NCCO <stream> action can play; fall back to Vonage's built-in TTS on any
+# failure so a vendor hiccup never kills a live call.
+# ---------------------------------------------------------------------------
+_tts = None
+
+
+def _get_tts():
+    global _tts
+    if _tts is None:
+        try:
+            from outbound_ai.voice.tts_elevenlabs import ElevenLabsTTS
+
+            _tts = ElevenLabsTTS() or False
+        except Exception as exc:
+            log.warning("elevenlabs_unavailable", error=str(exc))
+            _tts = False
+    return _tts or None
+
+
+async def speak(text: str) -> list[dict]:
+    """NCCO actions that speak `text` — ElevenLabs WAV when possible."""
+    tts = _get_tts()
+    if tts:
+        try:
+            import hashlib
+
+            import soundfile as sf
+
+            audio = await tts.synthesize(text)
+            name = f"call_{hashlib.md5(text.encode()).hexdigest()}.wav"
+            path = settings.audio_cache_path / name
+            settings.audio_cache_path.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                def _write():
+                    sf.write(str(path), audio.pcm, audio.sample_rate, subtype="PCM_16")
+
+                await asyncio.to_thread(_write)
+            url = f"{_base()}/audio/{name}"
+            return [{"action": "stream", "stream": [{"url": url, "loop": 1}]}]
+        except Exception as exc:
+            log.warning("elevenlabs_synthesis_failed", error=str(exc))
+    return [{"action": "talk", "text": text, "language": "ar"}]
+
+
+@app.get("/audio/{fname}", include_in_schema=False)
+async def serve_audio(fname: str):
+    """Public WAV endpoint Vonage streams during live calls."""
+    safe = Path(fname).name  # no traversal
+    path = settings.audio_cache_path / safe
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "audio not found")
+    return FileResponse(path, media_type="audio/wav")
 
 # ---------------------------------------------------------------------------
 # Routers (auth, KB management, user management, data visibility)
@@ -172,19 +229,70 @@ def _transcribe(b):
     return r.text.strip()
 
 
-def _save(rec):
+def _safe_uuid(v: str):
+    """Return v if it's a valid uuid, else None — the calls.ticket_id /
+    customer_id columns are uuid-typed, and free-text IDs like 'T-1001'
+    must never reach them (this silently killed every report row before)."""
+    try:
+        import uuid as _uuid
+
+        return str(_uuid.UUID(str(v)))
+    except Exception:
+        return None
+
+
+async def _save(
+    conv: str,
+    state: dict,
+    rep: dict,
+    *,
+    kb_answer: str | None = None,
+    sources: list | None = None,
+    escalation: dict | None = None,
+) -> None:
+    """Persist one call report — jsonl + Supabase `calls` row.
+
+    Includes workspace_id / timestamps / duration; without workspace_id the
+    insert violated its NOT NULL constraint and NOTHING ever showed up in
+    the dashboard."""
+    ctx = CALL_STATE.get(conv, {})
+    ended = datetime.now(timezone.utc)
+    started_iso = ctx.get("started_at") or ended.isoformat()
+    try:
+        started = datetime.fromisoformat(started_iso)
+        duration_seconds = max(0, round((ended - started).total_seconds()))
+    except ValueError:
+        duration_seconds = None
+
+    row = {
+        "vonage_call_id": ctx.get("call_id"),
+        "workspace_id": ctx.get("workspace_id") or DEFAULT_WORKSPACE_ID,
+        "transcript": " | ".join(ctx.get("turns", [])),
+        "intent": state.get("intent"),
+        "kb_answer": kb_answer if kb_answer is not None else ctx.get("kb_answer"),
+        "kb_sources": sources if sources else ctx.get("sources") or None,
+        "kb_answer_given": bool(state.get("kb_answer_given")),
+        "escalated": bool(state.get("escalated")),
+        "escalation_reason": (escalation or {}).get("escalation_reason")
+                             or state.get("escalation_reason"),
+        "call_outcome": rep.get("call_outcome"),
+        "call_summary": rep.get("call_summary"),
+        "started_at": started_iso,
+        "ended_at": ended.isoformat(),
+        "duration_seconds": duration_seconds,
+        "ticket_ref": ctx.get("ticket_id", "") or None,
+    }
+    tid = _safe_uuid(ctx.get("ticket_id", ""))
+    if tid:
+        row["ticket_id"] = tid
+
     Path("call_reports.jsonl").open("a", encoding="utf-8").write(
-        json.dumps(rec, ensure_ascii=False) + "\n")
+        json.dumps({"conv": conv, **row}, ensure_ascii=False, default=str) + "\n")
     try:
         sb = create_client(settings.supabase_url,
                            settings.supabase_service_role_key.get_secret_value())
-        sb.table("calls").insert({
-            "vonage_call_id": rec.get("call_id"), "transcript": rec.get("transcript"),
-            "intent": rec.get("intent"), "kb_answer": rec.get("kb_answer"),
-            "kb_sources": rec.get("sources"), "kb_answer_given": rec.get("kb_answer_given"),
-            "escalated": rec.get("escalated"), "escalation_reason": rec.get("escalation_reason"),
-            "call_outcome": rec.get("call_outcome"), "call_summary": rec.get("call_summary"),
-        }).execute()
+        sb.table("calls").insert(row).execute()
+        log.info("call_report_saved", conv=conv, duration=duration_seconds)
     except Exception as e:
         log.error("supabase_save_failed", error=str(e))
 
@@ -202,15 +310,26 @@ async def start_call(request: Request, ctx: AdminOrAbove):
                    "virtual number (Dashboard → Numbers) and restart the API.",
         )
     title = b.get("ticket_title", "شكوتك")
-    greeting = (f"السلام عليكم، أنا المساعد الآلي من خدمة العملاء. "
-                f"بكلمك بخصوص الشكوى بتاعتك عن {title}. "
-                f"عايز أتطمن، المشكلة اتحلت ولا لسه؟ اتكلم بعد الصفارة.")
-    ncco = [{"action": "talk", "text": greeting, "language": "ar"}, _rec(1), *_hold()]
+    greeting = (
+        f"السلام عليكم، معك المساعد الآلي من خدمة العملاء. "
+        f"أنا بكلمك دلوقتي بخصوص المشكلة بتاعتك، وهي {title}. "
+        f"عايز أطمن بس: هل المشكلة دي اتحلت ولا لسه؟ اتكلم بعد الصفارة."
+    )
+    ncco = [await speak(greeting)] + [_rec(1), *_hold()]
     session, conv = await _adapter.place_call_with_ncco(
         to_number=b["phone"], from_number=settings.vonage_from_number.lstrip("+"), ncco=ncco)
-    CALL_STATE[conv] = {"call_id": session.call_id, "ticket_id": b.get("ticket_id", ""),
-                        "ticket_title": title, "category": b.get("category", "billing"),
-                        "transcript": [], "turns": []}
+    CALL_STATE[conv] = {
+        "conv": conv,
+        "call_id": session.call_id,
+        "ticket_id": b.get("ticket_id", ""),
+        "ticket_title": title,
+        "category": b.get("category", "billing"),
+        "transcript": [],
+        "turns": [],
+        "stage": 1,
+        "workspace_id": str(ctx.workspace_id) if ctx.workspace_id else DEFAULT_WORKSPACE_ID,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
     log.info("call_started", call_id=session.call_id, conv=conv)
     return {"call_id": session.call_id, "conversation_uuid": conv}
 
@@ -223,6 +342,14 @@ async def event(request: Request):
         CALL_STATE[conv]["call_id"] = uuid
     log.info("vonage_event", status=b.get("status"))
     return {}
+
+
+_RESOLVED_WORDS = ("اتحلت", "تحلت", "خلاص", "تمام", "أهو", "اهو", "اشتغلت", "شغالة")
+_DONE_WORDS = ("خلصت", "خلص", "عملتها", "عملت كده", "سويت")
+
+
+def _says(text: str, words) -> bool:
+    return any(w in text for w in words)
 
 
 @app.post("/telephony/vonage/recording")
@@ -255,56 +382,94 @@ async def recording(request: Request):
     tr = ctx.get("transcript", []) + [HumanMessage(content=text)]
     ctx["transcript"] = tr
     ctx.setdefault("turns", []).append(text)
-    intent = await intent_classifier.classify(tr)
-    log.info("intent", intent=intent)
     cat, title = ctx.get("category", "billing"), ctx.get("ticket_title", "")
+    flow_stage = ctx.get("stage", 1)
 
-    if intent == "resolved":
-        await _adapter.update_call_ncco(call_id, [{"action": "talk",
-            "text": "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.",
-            "language": "ar"}])
-        rep = await reporting.summarize({"intent": intent, "kb_answer_given": True,
-                                         "escalated": False, "transcript": tr})
-        _save({"timestamp": datetime.now(timezone.utc).isoformat(), "call_id": call_id,
-               "ticket_title": title, "transcript": " | ".join(ctx["turns"]), "intent": intent,
-               "kb_answer": None, "sources": [], "kb_answer_given": False, "escalated": False,
-               "call_outcome": rep["call_outcome"], "call_summary": rep["call_summary"]})
+    async def _close(outcome_state: dict):
+        rep = await reporting.summarize(outcome_state)
+        await _save(conv, outcome_state, rep)
         return {}
 
-    if stage == 1:
-        ans, chunks, ok = await kb_assist.retrieve(text or title, cat)
+    # ---- customer asks for a human at ANY point --------------------------
+    intent = await intent_classifier.classify(tr)
+    log.info("intent", intent=intent, stage=flow_stage)
+    if intent == "wants_human":
+        return await _transfer_to_human(ctx, call_id, tr, {"intent": intent,
+            "kb_category": cat, "ticket_id": ctx.get("ticket_id", ""),
+            "kb_answer_given": ctx.get("kb_answer_given", False), "transcript": tr})
+
+    # ---- STAGE 1: first answer to "did it get resolved?" -----------------
+    if flow_stage == 1:
+        if intent == "resolved":
+            ncco = [await speak(
+                "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.")]
+            await _adapter.update_call_ncco(call_id, ncco)
+            return await _close({"intent": "resolved", "kb_answer_given": True,
+                                 "escalated": False, "transcript": tr})
+
+        # unresolved/unclear → KB-guided troubleshooting step
+        query = f"{title} {text}".strip()
+        ans, chunks, ok = await kb_assist.retrieve(
+            query, cat, style="call",
+            ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         rep1 = await reporting.summarize({"intent": intent, "kb_answer_given": ok,
                                           "escalated": False, "transcript": tr})
-        _save({"timestamp": datetime.now(timezone.utc).isoformat(), "call_id": call_id,
-               "ticket_title": title, "transcript": " | ".join(ctx["turns"]), "intent": intent,
-               "kb_answer": ans, "sources": [c.get("source") for c in chunks],
-               "kb_answer_given": ok, "escalated": False,
-               "call_outcome": rep1["call_outcome"], "call_summary": rep1["call_summary"]})
+        await _save(conv, {"intent": intent, "kb_answer_given": ok,
+                           "escalated": False, "transcript": tr}, rep1,
+                    kb_answer=ans, sources=[c.get("source") for c in chunks])
         ctx.update({"kb_answer": ans, "sources": [c.get("source") for c in chunks],
                     "kb_answer_given": ok})
         tr.append(AIMessage(content=ans))
-        spoken = f"طيب، حسب المعلومات اللي عندي: {ans} جربت كده؟ المشكلة اتحلت ولا محتاج حد من الفريق يكلمك؟"
-        await _adapter.update_call_ncco(call_id, [
-            {"action": "talk", "text": spoken, "language": "ar"}, _rec(2), *_hold()])
+        followup = (
+            f"{ans}" if ok else ans
+        )
+        spoken = followup if ans.endswith("قولّي خلصت.") or ans.endswith("قولي خلصت") \
+            else f"{ans} لما تخلص قولّي خلصت."
+        ncco = [await speak(spoken)] + [_rec(2), *_hold()]
+        ctx["stage"] = 2
+        await _adapter.update_call_ncco(call_id, ncco)
         return {}
 
-    state = {"intent": intent, "kb_category": cat, "ticket_id": ctx.get("ticket_id", ""),
-             "kb_answer_given": ctx.get("kb_answer_given", False), "transcript": tr}
+    # ---- STAGE 2: customer says they finished the step -------------------
+    if flow_stage == 2:
+        if _says(text, _DONE_WORDS) or intent in ("resolved", "unclear"):
+            ask = await speak("طب إيه، المشكلة اتحلت معاك ولا لسه؟")
+            ncco = list(ask) + [_rec(3), *_hold()]
+            ctx["stage"] = 3
+            await _adapter.update_call_ncco(call_id, ncco)
+            return {}
+        # still mid-step or something else → re-run KB with their new words
+        ans, chunks, ok = await kb_assist.retrieve(
+            f"{title} {text}", cat, style="call",
+            ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
+        spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
+        ncco = [await speak(spoken)] + [_rec(2), *_hold()]
+        await _adapter.update_call_ncco(call_id, ncco)
+        return {}
+
+    # ---- STAGE 3: final resolution verdict --------------------------------
+    resolved_now = _says(text, _RESOLVED_WORDS) or intent == "resolved"
+    if resolved_now:
+        ncco = [await speak(
+            "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.")]
+        await _adapter.update_call_ncco(call_id, ncco)
+        return await _close({"intent": "resolved", "kb_answer_given":
+                             ctx.get("kb_answer_given", False),
+                             "escalated": False, "transcript": tr})
+    return await _transfer_to_human(ctx, call_id, tr, {
+        "intent": intent, "kb_category": cat, "ticket_id": ctx.get("ticket_id", ""),
+        "kb_answer_given": ctx.get("kb_answer_given", False), "transcript": tr})
+
+
+async def _transfer_to_human(ctx: dict, call_id: str, tr: list, state: dict):
+    """Speak the handoff line, connect a human, persist the escalation."""
     esc = await routing.escalate(state)
-    await _adapter.update_call_ncco(call_id, [
-        {"action": "talk", "text": "معلش على الإزعاج. هحولك دلوقتي لموظف من الفريق يساعدك.",
-         "language": "ar"},
-        {"action": "connect", "from": "12345678901",
-         "endpoint": [{"type": "phone", "number": HUMAN_AGENT_NUMBER.lstrip("+")}]}])
+    ncco = [await speak("معلش على الإزعاج. أنا هحوّلك دلوقتي لممثل خدمة عملاء حقيقي يساعدك.")] + [
+        {"action": "connect", "from": settings.vonage_from_number.lstrip("+") or HUMAN_AGENT_NUMBER,
+         "endpoint": [{"type": "phone", "number": HUMAN_AGENT_NUMBER.lstrip("+")}]}]
+    await _adapter.update_call_ncco(call_id, ncco)
     rep = await reporting.summarize({**state, "escalated": True})
-    _save({"timestamp": datetime.now(timezone.utc).isoformat(), "call_id": call_id,
-           "ticket_title": title, "transcript": " | ".join(ctx["turns"]), "intent": intent,
-           "kb_answer": ctx.get("kb_answer"), "sources": ctx.get("sources", []),
-           "kb_answer_given": ctx.get("kb_answer_given", False), "escalated": True,
-           "escalation_reason": esc["escalation_reason"],
-           "escalation_priority": esc["escalation_priority"],
-           "escalation_brief": esc["escalation_brief"],
-           "call_outcome": rep["call_outcome"], "call_summary": rep["call_summary"]})
+    await _save(ctx.get("conv"), {**state, "escalated": True}, rep, escalation=esc)
     return {}
 
 
