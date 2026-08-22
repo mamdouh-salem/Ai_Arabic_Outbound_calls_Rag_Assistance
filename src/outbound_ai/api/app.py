@@ -301,8 +301,20 @@ async def _save(
         log.error("supabase_save_failed", error=str(e))
 
 
+def _cairo_greeting() -> str:
+    """Time-appropriate Arabic salutation in Egypt's timezone."""
+    from zoneinfo import ZoneInfo
+
+    try:
+        hour = datetime.now(ZoneInfo("Africa/Cairo")).hour
+    except Exception:
+        hour = datetime.now(timezone.utc).hour + 2  # rough Cairo offset fallback
+    return "صباح الخير" if 5 <= hour < 12 else "مساء الخير"
+
+
 async def _place_ticket_call(
-    *, phone: str, ticket_id: str, title: str, category: str, ctx
+    *, phone: str, ticket_id: str, title: str, category: str, ctx,
+    customer_name: str = "",
 ) -> dict:
     """Shared call-placement logic for manual and one-click ticket calls."""
     if not settings.vonage_from_number:
@@ -310,12 +322,15 @@ async def _place_ticket_call(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="VONAGE_FROM_NUMBER is not configured in .env.",
         )
+    name_part = f"يا {customer_name}" if customer_name else ""
     greeting = (
-        f"السلام عليكم، معك المساعد الآلي من خدمة العملاء. "
-        f"أنا بكلمك دلوقتي بخصوص المشكلة بتاعتك، وهي {title}. "
+        f"{_cairo_greeting()} {name_part}، معك المساعد الآلي من خدمة العملاء. "
+        f"أنا بكلمك دلوقتي بخصوص مشكلتك: {title}. "
         f"عايز أطمن بس: هل المشكلة دي اتحلت ولا لسه؟ اتكلم بعد الصفارة."
     )
-    ncco = [await speak(greeting)] + [_rec(1), *_hold()]
+    # NOTE: speak() returns a LIST of NCCO actions — always splat it, never
+    # nest it ([list] inside the array is what broke Vonage with 400).
+    ncco = [*await speak(greeting), _rec(1), *_hold()]
     session, conv = await _adapter.place_call_with_ncco(
         to_number=phone, from_number=settings.vonage_from_number.lstrip("+"), ncco=ncco)
     CALL_STATE[conv] = {
@@ -323,6 +338,7 @@ async def _place_ticket_call(
         "call_id": session.call_id,
         "ticket_id": str(ticket_id) if ticket_id else "",
         "ticket_title": title,
+        "customer_name": customer_name,
         "category": category or "billing",
         "transcript": [],
         "turns": [],
@@ -347,6 +363,7 @@ async def start_call(request: Request, ctx: AdminOrAbove):
         title=b.get("ticket_title", "شكوتك"),
         category=b.get("category", "billing"),
         ctx=ctx,
+        customer_name=b.get("customer_name", ""),
     )
 
 
@@ -359,7 +376,7 @@ async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAbove):
 
     sb = get_service_client()
     q = (sb.table("tickets")
-           .select("id, title, kb_category, customer_id, customers(phone)")
+           .select("id, title, kb_category, customer_id, customers(name, phone)")
            .eq("id", ticket_id))
     for col, val in (visible_ticket_filters(ctx) or {}).items():
         q = q.eq(col, val)
@@ -383,6 +400,7 @@ async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAbove):
         title=ticket.get("title") or "شكوتك",
         category=ticket.get("kb_category") or "billing",
         ctx=ctx,
+        customer_name=joined.get("name") or "",
     )
 
 
@@ -450,16 +468,26 @@ async def recording(request: Request):
             "kb_category": cat, "ticket_id": ctx.get("ticket_id", ""),
             "kb_answer_given": ctx.get("kb_answer_given", False), "transcript": tr})
 
-    # ---- STAGE 1: first answer to "did it get resolved?" -----------------
+    # ---- STAGE 1: answer to "did it get resolved?" ------------------------
     if flow_stage == 1:
         if intent == "resolved":
-            ncco = [await speak(
+            ncco = [*await speak(
                 "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.")]
             await _adapter.update_call_ncco(call_id, ncco)
             return await _close({"intent": "resolved", "kb_answer_given": True,
                                  "escalated": False, "transcript": tr})
 
-        # unresolved/unclear → KB-guided troubleshooting step
+        # NOT resolved → ask for details BEFORE searching the KB
+        ncco = [*await speak(
+            "معلش يا فندم. ممكن توضحلي أكتر؟ إيه اللي بيحصل معاك بالظبط؟"),
+            _rec(2), *_hold()]
+        ctx["stage"] = 2
+        await _adapter.update_call_ncco(call_id, ncco)
+        return {}
+
+    # ---- STAGE 2: explanation given → NOW run similarity search + KB ------
+    if flow_stage == 2:
+        # similarity search uses ticket title + the customer's own explanation
         query = f"{title} {text}".strip()
         ans, chunks, ok = await kb_assist.retrieve(
             query, cat, style="call",
@@ -472,37 +500,33 @@ async def recording(request: Request):
         ctx.update({"kb_answer": ans, "sources": [c.get("source") for c in chunks],
                     "kb_answer_given": ok})
         tr.append(AIMessage(content=ans))
-        followup = (
-            f"{ans}" if ok else ans
-        )
-        spoken = followup if ans.endswith("قولّي خلصت.") or ans.endswith("قولي خلصت") \
-            else f"{ans} لما تخلص قولّي خلصت."
-        ncco = [await speak(spoken)] + [_rec(2), *_hold()]
-        ctx["stage"] = 2
+        spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
+        ncco = [*await speak(spoken), _rec(3), *_hold()]
+        ctx["stage"] = 3
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
 
-    # ---- STAGE 2: customer says they finished the step -------------------
-    if flow_stage == 2:
-        if _says(text, _DONE_WORDS) or intent in ("resolved", "unclear"):
+    # ---- STAGE 3: did they finish the suggested step? ---------------------
+    if flow_stage == 3:
+        if _says(text, _DONE_WORDS) or intent == "resolved":
             ask = await speak("طب إيه، المشكلة اتحلت معاك ولا لسه؟")
-            ncco = list(ask) + [_rec(3), *_hold()]
-            ctx["stage"] = 3
+            ncco = list(ask) + [_rec(4), *_hold()]
+            ctx["stage"] = 4
             await _adapter.update_call_ncco(call_id, ncco)
             return {}
-        # still mid-step or something else → re-run KB with their new words
+        # not done yet / more detail → guide again from the KB
         ans, chunks, ok = await kb_assist.retrieve(
             f"{title} {text}", cat, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
-        ncco = [await speak(spoken)] + [_rec(2), *_hold()]
+        ncco = [*await speak(spoken), _rec(3), *_hold()]
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
 
-    # ---- STAGE 3: final resolution verdict --------------------------------
+    # ---- STAGE 4: final resolution verdict ---------------------------------
     resolved_now = _says(text, _RESOLVED_WORDS) or intent == "resolved"
     if resolved_now:
-        ncco = [await speak(
+        ncco = [*await speak(
             "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.")]
         await _adapter.update_call_ncco(call_id, ncco)
         return await _close({"intent": "resolved", "kb_answer_given":
@@ -516,9 +540,10 @@ async def recording(request: Request):
 async def _transfer_to_human(ctx: dict, call_id: str, tr: list, state: dict):
     """Speak the handoff line, connect a human, persist the escalation."""
     esc = await routing.escalate(state)
-    ncco = [await speak("معلش على الإزعاج. أنا هحوّلك دلوقتي لممثل خدمة عملاء حقيقي يساعدك.")] + [
-        {"action": "connect", "from": settings.vonage_from_number.lstrip("+") or HUMAN_AGENT_NUMBER,
-         "endpoint": [{"type": "phone", "number": HUMAN_AGENT_NUMBER.lstrip("+")}]}]
+    ncco = [*await speak("معلش على الإزعاج. أنا هحوّلك دلوقتي لممثل خدمة عملاء حقيقي يساعدك."),
+            {"action": "connect",
+             "from": settings.vonage_from_number.lstrip("+") or HUMAN_AGENT_NUMBER,
+             "endpoint": [{"type": "phone", "number": HUMAN_AGENT_NUMBER.lstrip("+")}]}]
     await _adapter.update_call_ncco(call_id, ncco)
     rep = await reporting.summarize({**state, "escalated": True})
     await _save(ctx.get("conv"), {**state, "escalated": True}, rep, escalation=esc)
