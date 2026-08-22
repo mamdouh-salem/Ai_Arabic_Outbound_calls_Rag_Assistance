@@ -152,6 +152,24 @@
     <section id="screen-chat" class="screen hidden">
       <h2>RAG Assistant</h2>
       <p class="muted">Grounded answers from your workspace knowledge base, with citations.</p>
+
+      <div class="panel" id="chat-upload-panel" style="display:none">
+        <h3>📎 Upload to knowledge base <span class="badge">pdf · docx · txt · md · csv</span></h3>
+        <div class="grid-2" style="align-items:end">
+          <div>
+            <label>Category *</label>
+            <input id="kb2-category" placeholder="routers / billing / accounts ...">
+            <label>File</label>
+            <input id="kb2-file" type="file" accept=".txt,.md,.markdown,.pdf,.docx,.csv,.json">
+          </div>
+          <div>
+            <label>Title <span class="muted">(optional)</span></label>
+            <input id="kb2-title" placeholder="SOP_Routers_06">
+            <button class="btn primary" onclick="kbQuickUpload()">⬆ Upload &amp; Ingest</button>
+          </div>
+        </div>
+      </div>
+
       <div class="grid-2">
         <div class="panel">
           <div id="chat-log" class="code" style="min-height:320px;max-height:480px">Ask a question about the knowledge base…</div>

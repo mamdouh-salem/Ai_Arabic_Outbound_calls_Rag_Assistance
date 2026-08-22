@@ -122,6 +122,10 @@ function showScreen(id) {
   document.getElementById(`screen-${id}`).classList.remove("hidden");
   document.querySelectorAll("#nav-tabs button").forEach(b =>
     b.classList.toggle("active", b.dataset.screen === id));
+  // upload-from-chat panel: admins+ only (upload endpoint requires it)
+  const up = document.getElementById("chat-upload-panel");
+  if (up) up.style.display =
+    ["admin", "super_admin"].includes(state.me.role) ? "" : "none";
   const loaders = {
     dashboard: loadDashboard, tickets: loadTickets, calls: loadCalls,
     kb: loadKb,
@@ -333,6 +337,26 @@ async function sendChat() {
     log.textContent = log.textContent.replace("⏳ thinking…", `❌ ${e.message}`);
     toast(e.message, true);
   }
+}
+
+/* quick upload from inside the RAG Chat screen (admin/super_admin only) */
+
+async function kbQuickUpload() {
+  const category = document.getElementById("kb2-category").value.trim();
+  const fileInput = document.getElementById("kb2-file");
+  if (!category) return toast("Category is required", true);
+  if (!fileInput.files.length) return toast("Choose a file first", true);
+  const fd = new FormData();
+  fd.append("category", category);
+  if (document.getElementById("kb2-title").value.trim())
+    fd.append("title", document.getElementById("kb2-title").value.trim());
+  fd.append("file", fileInput.files[0]);
+  try {
+    const res = await api("/kb/documents", { method: "POST", body: fd });
+    toast(`Ingested "${res.source}" — ${res.chunks} chunk(s) ✅ Ask away!`);
+    fileInput.value = "";
+    document.getElementById("kb2-title").value = "";
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ---------------- workspaces (super_admin) ---------------- */
