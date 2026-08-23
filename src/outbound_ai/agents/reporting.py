@@ -22,14 +22,14 @@ _SUMMARY_SYSTEM_PROMPT = """أنت تكتب ملخصًا موجزًا لمكال
 
 
 def _decide_outcome(state: dict) -> CallOutcome:
-    """Escalation always wins (a human took over, full stop). Otherwise the
-    call counts as resolved if either the customer confirmed it themselves
-    (intent == "resolved") or the KB successfully answered it — checking
-    only intent here was the bug that reported successful KB resolutions as
-    "unresolved" (see graph/nodes.py history)."""
+    """Resolution is decided ONLY by the customer's own confirmation
+    (intent == "resolved"). A previous version also accepted
+    kb_answer_given here — which marked every call the KB merely *spoke* on
+    as "resolved" even when the customer explicitly said the problem was
+    NOT solved. KB giving a step is assistance, not resolution."""
     if state.get("escalated"):
         return "escalated"
-    if state.get("intent") == "resolved" or state.get("kb_answer_given"):
+    if state.get("intent") == "resolved":
         return "resolved"
     return "unresolved"
 
