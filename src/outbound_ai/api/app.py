@@ -487,16 +487,27 @@ _HUMAN_WORDS = ("موظف", "بشر", "بشري", "ممثل", "إنسان", "ا�
 
 # Arabic negation handling: substring matching alone said "resolved" when the
 # customer said "متحلتش" (contains "تحلت") — the exact false-positive from the
-# live call. A negation marker anywhere in the utterance vetoes the hit.
-_NEGATION_WORDS = ("لا", "مش", "لسه", "لسا", "ليس", "مفيش", "ما", "لم ")
+# live call. Negation markers are matched as WHOLE WORDS (otherwise "تمام"
+# contains "ما" and "خلاص" contains "لا", killing true positives), plus an
+# explicit unresolved-phrases list for compound negatives.
+_NEGATION_TOKENS = {"لا", "مش", "لسه", "لسا", "ليس", "مفيش", "ما"}
 _UNRESOLVED_PHRASES = (
-    "متحلتش", "معملتش", "لسه موجودة", "لسه زي ما", "لسه مستمرة",
-    "نفس المشكلة", "مفيش فايدة", "زي ما هو", "لسه بتعمل", "ما اتحلتش",
+    "متحلتش", "معملتش", "ما اتحلتش", "ماتحلتش", "لسه موجودة", "لسه زي ما",
+    "لسه مستمرة", "نفس المشكلة", "مفيش فايدة", "زي ما هو", "لسه بتعمل",
 )
+_WORD_RE = __import__("re").compile(r"[\w\u0621-\u064A]+")
 
 
 def _says(text: str, words) -> bool:
     return any(w in text for w in words)
+
+
+def _has_negation(text: str) -> bool:
+    """Whole-word negation lookup across Arabic punctuation."""
+    return any(
+        tok in _NEGATION_TOKENS
+        for tok in (t.strip(".,!?؟؛:،") for t in _WORD_RE.findall(text))
+    )
 
 
 def _claims_resolved(text: str) -> bool:
@@ -507,7 +518,7 @@ def _claims_resolved(text: str) -> bool:
         return False
     if not _says(text, _RESOLVED_WORDS):
         return False
-    if _says(text, _NEGATION_WORDS):
+    if _has_negation(text):
         return False
     return True
 
@@ -703,6 +714,28 @@ def _kb_found_no_solution(ans: str) -> bool:
     """Detect the fallback answer (retrieved nothing relevant) so the call
     transfers instead of reading a dead-end to the customer."""
     return ("مش لاقي خطوة" in ans) or ("هحوّلك" in ans and "الدليل" in ans)
+
+
+@app.on_event("startup")
+async def warm_heavy_models():
+    """Pre-load everything slow BEFORE the first caller exists:
+    the sentence-transformers model (~20s cold) and the ElevenLabs hold WAV.
+    Without this, the first KB answer of every server restart made the
+    customer wait through the entire hold audio."""
+    async def _warm():
+        try:
+            from outbound_ai.rag.embeddings import get_embedding_model
+
+            t0 = datetime.now(timezone.utc)
+            await asyncio.to_thread(get_embedding_model)
+            log.info("warm_embedding_done",
+                     seconds=round((datetime.now(timezone.utc) - t0).total_seconds(), 1))
+            await _hold_ncco()  # synthesizes + caches the hold wav via ElevenLabs
+            log.info("warm_hold_audio_done")
+        except Exception as exc:
+            log.warning("warmup_failed", error=str(exc))
+
+    asyncio.create_task(_warm())
 
 
 # ---------------------------------------------------------------------------

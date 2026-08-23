@@ -240,6 +240,7 @@ async function loadCalls() {
   };
   renderTable("calls-table", rows, [
     { h: "Date",     f: r => r.started_at ? new Date(r.started_at).toLocaleString() : "-" },
+    { h: "Call ID",  f: r => `<code dir="ltr" title="${esc(r.vonage_call_id ?? r.id ?? "")}">${esc((r.vonage_call_id ?? r.id ?? "").slice(0, 10))}</code>` },
     { h: "Status",   f: r => STATUS_BADGE[r.call_status] ?? `<span class="muted">${esc(r.call_status ?? "-")}</span>` },
     { h: "Duration", f: r => r.duration_seconds != null
                           ? `${Math.floor(r.duration_seconds / 60)}m ${r.duration_seconds % 60}s`
