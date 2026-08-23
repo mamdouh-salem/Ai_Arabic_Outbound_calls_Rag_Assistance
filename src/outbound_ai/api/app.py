@@ -770,6 +770,18 @@ async def warm_heavy_models():
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@app.get("/workflow.png", include_in_schema=False)
+async def workflow_png():
+    """The agentic workflow diagram (nodes/edges) — generated from the actual
+    compiled LangGraph, no LangSmith login required."""
+    # src/outbound_ai/api/app.py -> project root is 3 levels up
+    path = Path(__file__).resolve().parents[3] / "graph_workflow.png"
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "Run scripts/visualization.py to generate it.")
+    return FileResponse(path, media_type="image/png")
+
+
 @app.get("/", include_in_schema=False)
 async def index():
     """The console UI — login screen, then role-aware dashboard."""
