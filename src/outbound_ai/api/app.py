@@ -442,9 +442,31 @@ _RESOLVED_WORDS = ("اتحلت", "تحلت", "خلاص", "تمام", "أهو", "
 _DONE_WORDS = ("خلصت", "خلص", "عملتها", "عملت كده", "سويت")
 _HUMAN_WORDS = ("موظف", "بشر", "بشري", "ممثل", "إنسان", "انسان")
 
+# Arabic negation handling: substring matching alone said "resolved" when the
+# customer said "متحلتش" (contains "تحلت") — the exact false-positive from the
+# live call. A negation marker anywhere in the utterance vetoes the hit.
+_NEGATION_WORDS = ("لا", "مش", "لسه", "لسا", "ليس", "مفيش", "ما", "لم ")
+_UNRESOLVED_PHRASES = (
+    "متحلتش", "معملتش", "لسه موجودة", "لسه زي ما", "لسه مستمرة",
+    "نفس المشكلة", "مفيش فايدة", "زي ما هو", "لسه بتعمل", "ما اتحلتش",
+)
+
 
 def _says(text: str, words) -> bool:
     return any(w in text for w in words)
+
+
+def _claims_resolved(text: str) -> bool:
+    """True only on an UNNEGATED resolution claim."""
+    if not text.strip():
+        return False
+    if _says(text, _UNRESOLVED_PHRASES):
+        return False
+    if not _says(text, _RESOLVED_WORDS):
+        return False
+    if _says(text, _NEGATION_WORDS):
+        return False
+    return True
 
 
 @app.post("/telephony/vonage/recording")
@@ -498,7 +520,7 @@ async def recording(request: Request):
 
     # ---- STAGE 1: answer to "did it get resolved?" ------------------------
     if flow_stage == 1:
-        if _says(text, _RESOLVED_WORDS):
+        if _claims_resolved(text):
             ncco = [*await speak(
                 "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.")]
             await _adapter.update_call_ncco(call_id, ncco)
@@ -531,7 +553,10 @@ async def recording(request: Request):
 
     # ---- STAGE 3: did they finish the suggested step? ---------------------
     if flow_stage == 3:
-        if _says(text, _DONE_WORDS) or _says(text, _RESOLVED_WORDS):
+        done_negated = _says(text, ("معملتهاش", "مخلصتش", "لسه", "لسا",
+                                    "لما أخلص", "لسه بشتغل"))
+        if (( _says(text, _DONE_WORDS) or _says(text, _RESOLVED_WORDS))
+                and not done_negated):
             ask = await speak("طب إيه، المشكلة اتحلت معاك ولا لسه؟")
             ncco = list(ask) + [_rec(4), *await _hold_ncco()]
             ctx["stage"] = 4
@@ -547,7 +572,7 @@ async def recording(request: Request):
         return {}
 
     # ---- STAGE 4: final resolution verdict ---------------------------------
-    resolved_now = _says(text, _RESOLVED_WORDS) or (
+    resolved_now = _claims_resolved(text) or (
         await intent_classifier.classify(tr) == "resolved"
     )
     if resolved_now:
