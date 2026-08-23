@@ -220,7 +220,7 @@ def _rec(stage):
             "endOnSilence": 3, "endOnKey": "#", "beepStart": True}
 
 
-_HOLD_TEXT = "خليك معايا يا فندم، بدوّرلك على حل مناسب للمشكلة."
+_HOLD_TEXT = "طيب إديني ثواني يا فندم، خليك معايا على المكالمة لو سمحت."
 _HOLD_TRAILING_SILENCE_SECONDS = 8  # say it ONCE, then quiet — but the call
                                     # stays alive while we work on the answer
 
