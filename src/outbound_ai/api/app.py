@@ -354,7 +354,7 @@ async def _place_ticket_call(
     )
     # NOTE: speak() returns a LIST of NCCO actions — always splat it, never
     # nest it ([list] inside the array is what broke Vonage with 400).
-    ncco = [*await speak(greeting), _rec(1), *_hold()]
+    ncco = [*await speak(greeting), _rec(1), *await _hold_ncco()]
     session, conv = await _adapter.place_call_with_ncco(
         to_number=phone, from_number=settings.vonage_from_number.lstrip("+"), ncco=ncco)
     CALL_STATE[conv] = {
@@ -508,7 +508,7 @@ async def recording(request: Request):
         # NOT resolved → ask for details BEFORE searching the KB
         ncco = [*await speak(
             "معلش يا فندم. ممكن توضحلي أكتر؟ إيه اللي بيحصل معاك بالظبط؟"),
-            _rec(2), *_await_hold()]
+            _rec(2), *await _hold_ncco()]
         ctx["stage"] = 2
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
@@ -524,7 +524,7 @@ async def recording(request: Request):
                     "kb_answer_given": ok})
         tr.append(AIMessage(content=ans))
         spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
-        ncco = [*await speak(spoken), _rec(3), *_await_hold()]
+        ncco = [*await speak(spoken), _rec(3), *await _hold_ncco()]
         ctx["stage"] = 3
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
@@ -533,7 +533,7 @@ async def recording(request: Request):
     if flow_stage == 3:
         if _says(text, _DONE_WORDS) or _says(text, _RESOLVED_WORDS):
             ask = await speak("طب إيه، المشكلة اتحلت معاك ولا لسه؟")
-            ncco = list(ask) + [_rec(4), *_await_hold()]
+            ncco = list(ask) + [_rec(4), *await _hold_ncco()]
             ctx["stage"] = 4
             await _adapter.update_call_ncco(call_id, ncco)
             return {}
@@ -542,7 +542,7 @@ async def recording(request: Request):
             f"{title} {text}", cat, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
-        ncco = [*await speak(spoken), _rec(3), *_await_hold()]
+        ncco = [*await speak(spoken), _rec(3), *await _hold_ncco()]
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
 
