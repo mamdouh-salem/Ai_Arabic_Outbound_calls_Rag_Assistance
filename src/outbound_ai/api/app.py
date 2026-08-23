@@ -303,6 +303,7 @@ async def _save(
     row = {
         "vonage_call_id": ctx.get("call_id"),
         "workspace_id": ctx.get("workspace_id") or DEFAULT_WORKSPACE_ID,
+        "call_status": ctx.get("call_status") or "unknown",
         "transcript": " | ".join(ctx.get("turns", [])),
         "intent": state.get("intent"),
         "kb_answer": kb_answer if kb_answer is not None else ctx.get("kb_answer"),
@@ -328,7 +329,9 @@ async def _save(
         sb = create_client(settings.supabase_url,
                            settings.supabase_service_role_key.get_secret_value())
         sb.table("calls").insert(row).execute()
-        log.info("call_report_saved", conv=conv, duration=duration_seconds)
+        ctx["report_saved"] = True
+        log.info("call_report_saved", conv=conv, duration=duration_seconds,
+                 status=row.get("call_status"))
     except Exception as e:
         log.error("supabase_save_failed", error=str(e))
 
@@ -368,6 +371,7 @@ async def _place_ticket_call(
     CALL_STATE[conv] = {
         "conv": conv,
         "call_id": session.call_id,
+        "call_status": "dialing",
         "ticket_id": str(ticket_id) if ticket_id else "",
         "ticket_title": title,
         "customer_name": customer_name,
@@ -438,11 +442,42 @@ async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAbove):
 
 @app.post("/telephony/vonage/event")
 async def event(request: Request):
+    """Vonage call lifecycle events. This is where we know whether the
+    customer's phone rang, was busy, declined, or answered — the recording
+    webhooks only ever fire for ANSWERED calls."""
     b = await request.json()
-    conv, uuid = b.get("conversation_uuid"), b.get("uuid")
-    if conv and uuid and conv in CALL_STATE:
-        CALL_STATE[conv]["call_id"] = uuid
-    log.info("vonage_event", status=b.get("status"))
+    status = (b.get("status") or "").lower()
+    conv = b.get("conversation_uuid")
+    ctx = CALL_STATE.get(conv)
+    log.info("vonage_event", status=status, known=ctx is not None)
+
+    if ctx is not None and status:
+        mapping = {"started": "dialing", "ringing": "ringing", "answered": "answered"}
+        ctx["call_status"] = mapping.get(status, status)
+
+        # Never-connected outcomes: report immediately — no recording webhook
+        # will ever arrive for these calls.
+        if status in ("busy", "rejected", "cancelled", "failed", "timeout"):
+            if not ctx.get("report_saved"):
+                label = {"busy": "الخط كان مشغول 📵",
+                         "rejected": "تم رفض المكالمة 🚫",
+                         "cancelled": "تم إلغاء المكالمة",
+                         "timeout": "رنّت بدون إجابة ⏰",
+                         "failed": "فشل الاتصال ❌"}[status]
+                rep = {"call_outcome": "not_connected",
+                       "call_summary": f"لم يتم الاتصال بالعميل: {label}"}
+                await _save(conv, {"intent": None, "kb_answer_given": False,
+                                   "escalated": False}, rep)
+            CALL_STATE.pop(conv, None)
+
+        # Answered but hung up before the flow finished a verdict → abandoned
+        elif status == "completed" and not ctx.get("report_saved"):
+            rep = {"call_outcome": "abandoned",
+                   "call_summary": "العميل أنهى المكالمة قبل اكتمال المعالجة."}
+            await _save(conv, {"intent": None,
+                               "kb_answer_given": ctx.get("kb_answer_given", False),
+                               "escalated": False}, rep)
+            CALL_STATE.pop(conv, None)
     return {}
 
 
@@ -587,6 +622,13 @@ async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
         ctx.update({"kb_answer": ans, "sources": [c.get("source") for c in chunks],
                     "kb_answer_given": ok})
         tr.append(AIMessage(content=ans))
+        if not ok or _kb_found_no_solution(ans):
+            # nothing useful in the KB → say it honestly and hand off
+            return await _transfer_to_human(ctx, call_id, tr, {
+                "intent": "unresolved", "kb_category": cat,
+                "ticket_id": ctx.get("ticket_id", ""),
+                "kb_answer_given": False, "transcript": tr},
+                line=_NO_SOLUTION_LINE)
         spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
         ncco = [*await speak(spoken), _rec(3), *await _hold_ncco()]
         ctx["stage"] = 3
@@ -608,6 +650,12 @@ async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
         ans, chunks, ok = await kb_assist.retrieve(
             f"{title} {text}", cat, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
+        if not ok or _kb_found_no_solution(ans):
+            return await _transfer_to_human(ctx, call_id, tr, {
+                "intent": "unresolved", "kb_category": cat,
+                "ticket_id": ctx.get("ticket_id", ""),
+                "kb_answer_given": False, "transcript": tr},
+                line=_NO_SOLUTION_LINE)
         spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
         ncco = [*await speak(spoken), _rec(3), *await _hold_ncco()]
         await _adapter.update_call_ncco(call_id, ncco)
@@ -630,10 +678,12 @@ async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
         "kb_answer_given": ctx.get("kb_answer_given", False), "transcript": tr})
 
 
-async def _transfer_to_human(ctx: dict, call_id: str, tr: list, state: dict):
+async def _transfer_to_human(ctx: dict, call_id: str, tr: list, state: dict,
+                             line: str | None = None):
     """Speak the handoff line, connect a human, persist the escalation."""
     esc = await routing.escalate(state)
-    ncco = [*await speak("معلش على الإزعاج. أنا هحوّلك دلوقتي لممثل خدمة عملاء حقيقي يساعدك."),
+    handoff = line or "معلش على الإزعاج. أنا هحوّلك دلوقتي لممثل خدمة عملاء حقيقي يساعدك."
+    ncco = [*await speak(handoff),
             {"action": "connect",
              "from": settings.vonage_from_number.lstrip("+") or HUMAN_AGENT_NUMBER,
              "endpoint": [{"type": "phone", "number": HUMAN_AGENT_NUMBER.lstrip("+")}]}]
@@ -641,6 +691,18 @@ async def _transfer_to_human(ctx: dict, call_id: str, tr: list, state: dict):
     rep = await reporting.summarize({**state, "escalated": True})
     await _save(ctx.get("conv"), {**state, "escalated": True}, rep, escalation=esc)
     return {}
+
+
+_NO_SOLUTION_LINE = (
+    "أنا دورت على حل مناسب للمشكلة دي من الدليل بتاعنا ومش لاقي. "
+    "فهحوّلك دلوقتي على ممثل بشري أفضل مني، لأن عنده معرفة أكتر."
+)
+
+
+def _kb_found_no_solution(ans: str) -> bool:
+    """Detect the fallback answer (retrieved nothing relevant) so the call
+    transfers instead of reading a dead-end to the customer."""
+    return ("مش لاقي خطوة" in ans) or ("هحوّلك" in ans and "الدليل" in ans)
 
 
 # ---------------------------------------------------------------------------

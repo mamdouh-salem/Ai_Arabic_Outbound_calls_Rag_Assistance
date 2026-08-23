@@ -227,8 +227,20 @@ async function callTicket(ticketId) {
 
 async function loadCalls() {
   const rows = await api("/calls");
+  const STATUS_BADGE = {
+    answered:  '<span class="badge agent">✅ Answered</span>',
+    dialing:   '<span class="muted">dialing…</span>',
+    ringing:   '<span class="badge warn">📞 Ringing</span>',
+    busy:      '<span class="badge danger">📵 Busy</span>',
+    rejected:  '<span class="badge danger">🚫 Declined</span>',
+    cancelled: '<span class="muted">Cancelled</span>',
+    failed:    '<span class="badge danger">❌ Failed</span>',
+    timeout:   '<span class="badge warn">⏰ No answer</span>',
+    completed: '<span class="muted">completed</span>',
+  };
   renderTable("calls-table", rows, [
     { h: "Date",     f: r => r.started_at ? new Date(r.started_at).toLocaleString() : "-" },
+    { h: "Status",   f: r => STATUS_BADGE[r.call_status] ?? `<span class="muted">${esc(r.call_status ?? "-")}</span>` },
     { h: "Duration", f: r => r.duration_seconds != null
                           ? `${Math.floor(r.duration_seconds / 60)}m ${r.duration_seconds % 60}s`
                           : "-" },
