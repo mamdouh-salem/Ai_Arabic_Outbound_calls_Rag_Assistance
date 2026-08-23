@@ -448,7 +448,7 @@ async def event(request: Request):
     b = await request.json()
     status = (b.get("status") or "").lower()
     conv = b.get("conversation_uuid")
-    ctx = CALL_STATE.get(conv)
+    ctx = _adopt_conversation(conv)
     log.info("vonage_event", status=status, known=ctx is not None)
 
     if ctx is not None and status:
@@ -523,13 +523,39 @@ def _claims_resolved(text: str) -> bool:
     return True
 
 
+def _adopt_conversation(conv: str):
+    """Vonage assigns a NEW conversation_uuid every time we push a mid-call
+    NCCO (update_call_ncco transfers the leg). Recording/event webhooks then
+    arrive under the NEW uuid, which isn't in CALL_STATE — so the stage-2
+    answer never got processed (the 'hold ×4 then hangup' bug).
+
+    If we see an unknown conv while exactly ONE unsaved live call exists,
+    adopt it: re-key that call's state under the new conversation_uuid.
+    (Single-active-call assumption holds for local/dev testing.)"""
+    ctx = CALL_STATE.get(conv)
+    if ctx is not None:
+        return ctx
+    live = [c for c in CALL_STATE.values() if not c.get("report_saved")]
+    if len(live) == 1:
+        old = live[0]
+        old_key = old.get("conv")
+        CALL_STATE.pop(old_key, None)
+        old.setdefault("prev_convs", []).append(old_key)
+        old["conv"] = conv
+        CALL_STATE[conv] = old
+        log.info("conversation_adopted_after_transfer",
+                 new_conv=conv, old_conv=old_key)
+        return old
+    return None
+
+
 @app.post("/telephony/vonage/recording")
 async def recording(request: Request):
     b = await request.json()
     stage = int(request.query_params.get("stage", "1"))
     conv, url = b.get("conversation_uuid"), b.get("recording_url")
-    ctx = CALL_STATE.get(conv, {})
-    call_id = ctx.get("call_id")
+    ctx = _adopt_conversation(conv)
+    call_id = ctx.get("call_id") if ctx else None
     if not url or not call_id:
         # diagnostic: why did a recording webhook arrive without what we need?
         log.warning("recording_webhook_incomplete",
