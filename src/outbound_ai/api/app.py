@@ -219,10 +219,34 @@ def _rec(stage):
             "endOnSilence": 3, "endOnKey": "#", "beepStart": True}
 
 
-def _hold():
-    line = ("لحظة واحدة يا فندم، بشوف الموضوع ده حالاً. استنى معايا شوية من فضلك. "
-            "شكراً لصبرك، جاري مراجعة بيانات الشكوى بتاعتك دلوقتي.")
-    return [{"action": "talk", "text": line, "language": "ar"} for _ in range(5)]
+_HOLD_TEXT = "ثواني بس، بدوّرلك على حل مناسب للمشكلة، استنى معايا شوية."
+
+
+async def _hold_ncco():
+    """Hold audio while the agent thinks — ElevenLabs voice (never Vonage),
+    looped a few times so long processing never leaves the caller silent,
+    which is what made the call drop mid-conversation."""
+    try:
+        import hashlib
+
+        import soundfile as sf
+
+        tts = _get_tts()
+        if tts is None:
+            raise RuntimeError("no tts")
+        audio = await tts.synthesize(_HOLD_TEXT)
+        name = f"hold_{hashlib.md5(_HOLD_TEXT.encode()).hexdigest()}.wav"
+        path = settings.audio_cache_path / name
+        settings.audio_cache_path.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            await asyncio.to_thread(
+                sf.write, str(path), audio.pcm, audio.sample_rate, subtype="PCM_16")
+        url = f"{_base()}/audio/{name}"
+        return [{"action": "stream", "streamUrl": [url], "loop": 4, "bargeIn": False}]
+    except Exception as exc:
+        log.warning("hold_synthesis_failed", error=str(exc))
+        # last-resort silence-free fallback (rarely hit)
+        return [{"action": "talk", "text": "استنى معايا شوية.", "language": "ar"}]
 
 
 def _transcribe(b):
@@ -416,6 +440,7 @@ async def event(request: Request):
 
 _RESOLVED_WORDS = ("اتحلت", "تحلت", "خلاص", "تمام", "أهو", "اهو", "اشتغلت", "شغالة")
 _DONE_WORDS = ("خلصت", "خلص", "عملتها", "عملت كده", "سويت")
+_HUMAN_WORDS = ("موظف", "بشر", "بشري", "ممثل", "إنسان", "انسان")
 
 
 def _says(text: str, words) -> bool:
@@ -456,21 +481,24 @@ async def recording(request: Request):
     flow_stage = ctx.get("stage", 1)
 
     async def _close(outcome_state: dict):
+        intent = await intent_classifier.classify(tr)
+        outcome_state["intent"] = intent
         rep = await reporting.summarize(outcome_state)
         await _save(conv, outcome_state, rep)
         return {}
 
-    # ---- customer asks for a human at ANY point --------------------------
-    intent = await intent_classifier.classify(tr)
-    log.info("intent", intent=intent, stage=flow_stage)
-    if intent == "wants_human":
-        return await _transfer_to_human(ctx, call_id, tr, {"intent": intent,
+    # Cheap keyword check every turn. The slow LLM intent classifier only
+    # runs at the verdict stages — running it on every turn is what made
+    # stage-2 processing outlast the hold audio and drop the call.
+    if _says(text, _HUMAN_WORDS):
+        log.info("human_requested_keyword", stage=flow_stage)
+        return await _transfer_to_human(ctx, call_id, tr, {"intent": "wants_human",
             "kb_category": cat, "ticket_id": ctx.get("ticket_id", ""),
             "kb_answer_given": ctx.get("kb_answer_given", False), "transcript": tr})
 
     # ---- STAGE 1: answer to "did it get resolved?" ------------------------
     if flow_stage == 1:
-        if intent == "resolved":
+        if _says(text, _RESOLVED_WORDS):
             ncco = [*await speak(
                 "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.")]
             await _adapter.update_call_ncco(call_id, ncco)
@@ -480,7 +508,7 @@ async def recording(request: Request):
         # NOT resolved → ask for details BEFORE searching the KB
         ncco = [*await speak(
             "معلش يا فندم. ممكن توضحلي أكتر؟ إيه اللي بيحصل معاك بالظبط؟"),
-            _rec(2), *_hold()]
+            _rec(2), *_await_hold()]
         ctx["stage"] = 2
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
@@ -492,25 +520,20 @@ async def recording(request: Request):
         ans, chunks, ok = await kb_assist.retrieve(
             query, cat, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
-        rep1 = await reporting.summarize({"intent": intent, "kb_answer_given": ok,
-                                          "escalated": False, "transcript": tr})
-        await _save(conv, {"intent": intent, "kb_answer_given": ok,
-                           "escalated": False, "transcript": tr}, rep1,
-                    kb_answer=ans, sources=[c.get("source") for c in chunks])
         ctx.update({"kb_answer": ans, "sources": [c.get("source") for c in chunks],
                     "kb_answer_given": ok})
         tr.append(AIMessage(content=ans))
         spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
-        ncco = [*await speak(spoken), _rec(3), *_hold()]
+        ncco = [*await speak(spoken), _rec(3), *_await_hold()]
         ctx["stage"] = 3
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
 
     # ---- STAGE 3: did they finish the suggested step? ---------------------
     if flow_stage == 3:
-        if _says(text, _DONE_WORDS) or intent == "resolved":
+        if _says(text, _DONE_WORDS) or _says(text, _RESOLVED_WORDS):
             ask = await speak("طب إيه، المشكلة اتحلت معاك ولا لسه؟")
-            ncco = list(ask) + [_rec(4), *_hold()]
+            ncco = list(ask) + [_rec(4), *_await_hold()]
             ctx["stage"] = 4
             await _adapter.update_call_ncco(call_id, ncco)
             return {}
@@ -519,12 +542,14 @@ async def recording(request: Request):
             f"{title} {text}", cat, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         spoken = ans if ans.endswith(("خلصت.", "خلصت")) else f"{ans} لما تخلص قولّي خلصت."
-        ncco = [*await speak(spoken), _rec(3), *_hold()]
+        ncco = [*await speak(spoken), _rec(3), *_await_hold()]
         await _adapter.update_call_ncco(call_id, ncco)
         return {}
 
     # ---- STAGE 4: final resolution verdict ---------------------------------
-    resolved_now = _says(text, _RESOLVED_WORDS) or intent == "resolved"
+    resolved_now = _says(text, _RESOLVED_WORDS) or (
+        await intent_classifier.classify(tr) == "resolved"
+    )
     if resolved_now:
         ncco = [*await speak(
             "تمام الحمد لله، مبسوط إن المشكلة اتحلت. شكراً لوقتك، مع السلامة.")]
@@ -533,7 +558,8 @@ async def recording(request: Request):
                              ctx.get("kb_answer_given", False),
                              "escalated": False, "transcript": tr})
     return await _transfer_to_human(ctx, call_id, tr, {
-        "intent": intent, "kb_category": cat, "ticket_id": ctx.get("ticket_id", ""),
+        "intent": "unresolved", "kb_category": cat,
+        "ticket_id": ctx.get("ticket_id", ""),
         "kb_answer_given": ctx.get("kb_answer_given", False), "transcript": tr})
 
 
