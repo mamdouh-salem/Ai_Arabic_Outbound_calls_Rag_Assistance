@@ -228,15 +228,26 @@ async function callTicket(ticketId) {
 async function loadCalls() {
   const rows = await api("/calls");
   renderTable("calls-table", rows, [
-    { h: "Date",        f: r => r.started_at ? new Date(r.started_at).toLocaleString() : "-" },
-    { h: "Duration",    f: r => r.duration_seconds != null
-                            ? `${Math.floor(r.duration_seconds / 60)}m ${r.duration_seconds % 60}s`
-                            : "-" },
-    { h: "Outcome",     f: r => esc(r.call_outcome ?? "-") },
-    { h: "Intent",      f: r => esc(r.intent ?? "-") },
-    { h: "KB answer?",  f: r => r.kb_answer_given ? "✅" : "—" },
-    { h: "Escalated",   f: r => r.escalated ? "🚨" : "—" },
-    { h: "Summary",     f: r => `<span dir="rtl">${esc((r.call_summary ?? "").slice(0, 90))}</span>` },
+    { h: "Date",     f: r => r.started_at ? new Date(r.started_at).toLocaleString() : "-" },
+    { h: "Duration", f: r => r.duration_seconds != null
+                          ? `${Math.floor(r.duration_seconds / 60)}m ${r.duration_seconds % 60}s`
+                          : "-" },
+    { h: "Outcome",  f: r => esc(r.call_outcome ?? "-") },
+    { h: "Intent",   f: r => esc(r.intent ?? "-") },
+    { h: "KB?",      f: r => r.kb_answer_given ? "✅" : "—" },
+    { h: "Escalated",f: r => r.escalated ? "🚨" : "—" },
+    { h: "Transcript", f: r => `<span dir="rtl" class="muted">${esc((r.transcript ?? "").slice(0, 120))}…</span>` },
+    { h: "KB answer",  f: r => `<span dir="rtl">${esc((r.kb_answer ?? "").slice(0, 140))}</span>` },
+    { h: "Sources",    f: r => {
+        let list = r.kb_sources;
+        if (Array.isArray(list)) list = list.map(s => typeof s === "string" ? s : s?.source).filter(Boolean);
+        else if (list && Array.isArray(list.list)) list = list.list;
+        else if (typeof list === "string") { try { const p = JSON.parse(list);
+             list = Array.isArray(p) ? p.map(x => x?.source ?? x) : [String(p)]; } catch { list = [list]; } }
+        else list = [];
+        return `<span dir="rtl" class="muted">${esc((list || []).join("، ")) || "—"}</span>`;
+    }},
+    { h: "Summary",  f: r => `<span dir="rtl">${esc((r.call_summary ?? "").slice(0, 110))}</span>` },
   ]);
 }
 

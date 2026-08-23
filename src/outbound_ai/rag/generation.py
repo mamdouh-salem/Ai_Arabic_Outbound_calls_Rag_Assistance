@@ -56,9 +56,16 @@ def generate_answer(
     else:
         messages = build_messages(question=question, context=context)
 
+    # live-call answers must be FAST — a short step needs far fewer tokens
+    # than the 512-token default, and generation time is caller wait time.
+    token_budget = (
+        min(settings.generation_max_new_tokens, 160)
+        if style == "call"
+        else settings.generation_max_new_tokens
+    )
     answer = run_chat(
         messages,
-        max_new_tokens=settings.generation_max_new_tokens,
+        max_new_tokens=token_budget,
         temperature=settings.generation_temperature,
     )
 

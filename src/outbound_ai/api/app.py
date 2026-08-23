@@ -1,6 +1,7 @@
 """Multi-turn Arabic outbound call agent + reporting."""
 import asyncio
 import json
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -219,33 +220,40 @@ def _rec(stage):
             "endOnSilence": 3, "endOnKey": "#", "beepStart": True}
 
 
-_HOLD_TEXT = "ثواني بس، بدوّرلك على حل مناسب للمشكلة، استنى معايا شوية."
+_HOLD_TEXT = "خليك معايا يا فندم، بدوّرلك على حل مناسب للمشكلة."
+_HOLD_TRAILING_SILENCE_SECONDS = 8  # say it ONCE, then quiet — but the call
+                                    # stays alive while we work on the answer
 
 
 async def _hold_ncco():
-    """Hold audio while the agent thinks — ElevenLabs voice (never Vonage),
-    looped a few times so long processing never leaves the caller silent,
-    which is what made the call drop mid-conversation."""
+    """Hold audio while the agent thinks — ElevenLabs voice (never Vonage).
+    The phrase plays once; ~8s of silence follows inside the SAME wav and the
+    stream loops, so Vonage never runs out of NCCO actions (an exhausted NCCO
+    is what hung up mid-call) yet the caller isn't nagged with repeats."""
     try:
         import hashlib
 
+        import numpy as np
         import soundfile as sf
 
         tts = _get_tts()
         if tts is None:
             raise RuntimeError("no tts")
         audio = await tts.synthesize(_HOLD_TEXT)
+        silence = np.zeros(int(_HOLD_TRAILING_SILENCE_SECONDS * audio.sample_rate),
+                           dtype=audio.pcm.dtype)
+        padded = np.concatenate([audio.pcm, silence])
         name = f"hold_{hashlib.md5(_HOLD_TEXT.encode()).hexdigest()}.wav"
         path = settings.audio_cache_path / name
         settings.audio_cache_path.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             await asyncio.to_thread(
-                sf.write, str(path), audio.pcm, audio.sample_rate, subtype="PCM_16")
+                sf.write, str(path), padded, audio.sample_rate, subtype="PCM_16")
         url = f"{_base()}/audio/{name}"
-        return [{"action": "stream", "streamUrl": [url], "loop": 4, "bargeIn": False}]
+        return [{"action": "stream", "streamUrl": [url], "loop": 0, "bargeIn": False}]
     except Exception as exc:
         log.warning("hold_synthesis_failed", error=str(exc))
-        # last-resort silence-free fallback (rarely hit)
+        # last-resort fallback (rarely hit)
         return [{"action": "talk", "text": "استنى معايا شوية.", "language": "ar"}]
 
 
@@ -477,6 +485,13 @@ async def recording(request: Request):
     ctx = CALL_STATE.get(conv, {})
     call_id = ctx.get("call_id")
     if not url or not call_id:
+        # diagnostic: why did a recording webhook arrive without what we need?
+        log.warning("recording_webhook_incomplete",
+                    stage=stage,
+                    has_conv=bool(conv),
+                    known_conv=conv in CALL_STATE,
+                    has_recording_url=bool(url),
+                    payload_keys=sorted(b.keys()))
         return {}
 
     # Vonage can fire the same recording webhook more than once for the same
@@ -501,6 +516,33 @@ async def recording(request: Request):
     ctx.setdefault("turns", []).append(text)
     cat, title = ctx.get("category", "billing"), ctx.get("ticket_title", "")
     flow_stage = ctx.get("stage", 1)
+
+    try:
+        return await _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage)
+    except Exception as exc:
+        # NEVER let a processing failure leave the caller in dead air —
+        # apologize, hand off, and still write the report row.
+        log.error("stage_processing_failed", stage=flow_stage, error=str(exc),
+                  traceback=traceback.format_exc())
+        try:
+            ncco = [*await speak(
+                "معلش على الإزعاج، حصلت مشكلة تقنية عندنا. هحوّلك دلوقتي لممثل خدمة عملاء."),
+                {"action": "connect",
+                 "from": settings.vonage_from_number.lstrip("+") or HUMAN_AGENT_NUMBER,
+                 "endpoint": [{"type": "phone",
+                               "number": HUMAN_AGENT_NUMBER.lstrip("+")}]}]
+            await _adapter.update_call_ncco(call_id, ncco)
+        except Exception as nc_exc:
+            log.error("failure_fallback_ncco_also_failed", error=str(nc_exc))
+        rep = {"call_outcome": "failed", "call_summary":
+               f"معالجة المكالمة فشلت في المرحلة {flow_stage}: {exc}"}
+        await _save(conv, {"intent": "unresolved", "kb_answer_given": False,
+                           "escalated": True, "transcript": tr}, rep,
+                    escalation={"escalation_reason": "processing_error"})
+        return {}
+
+
+async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
 
     async def _close(outcome_state: dict):
         intent = await intent_classifier.classify(tr)
