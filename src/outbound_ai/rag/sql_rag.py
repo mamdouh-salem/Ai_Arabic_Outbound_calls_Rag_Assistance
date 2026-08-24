@@ -87,11 +87,12 @@ def run_sql_query(question: str) -> dict:
     raw = run_chat(messages, max_new_tokens=300, temperature=0.0)
     sql = validate_sql(raw)
 
-    conn_kwargs = {"autocommit": True, "readonly": True}
+    conn_kwargs = {"autocommit": True}
     with psycopg.connect(
         settings.database_url.get_secret_value(),
         **conn_kwargs,
     ) as conn:
+        conn.read_only = True  # psycopg3 attribute — DB rejects any write
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = '10s'")
             cur.execute(sql)
