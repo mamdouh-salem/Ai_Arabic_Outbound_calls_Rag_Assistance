@@ -27,6 +27,8 @@ def generate_answer(
     workspace_id: str | None = None,
     style: str = "qa",
     ticket_context: str = "",
+    persona: str = "default",
+    language: str | None = None,
 ) -> dict:
     """Run the full RAG loop: retrieve -> build context -> generate.
 
@@ -54,7 +56,9 @@ def generate_answer(
             question, context, ticket_context=ticket_context
         )
     else:
-        messages = build_messages(question=question, context=context)
+        messages = build_messages(
+            question=question, context=context, persona=persona, language=language
+        )
 
     # live-call answers must be FAST — a short step needs far fewer tokens
     # than the 512-token default, and generation time is caller wait time.

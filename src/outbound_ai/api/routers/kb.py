@@ -140,29 +140,75 @@ async def delete_document(source_name: str, ctx: AdminOrAbove) -> dict:
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
     category: str | None = None
+    persona: str = "default"
+    # arabic (default) | english | spanish | german | french
+    language: str | None = None
+
+
+def _chat_scope(ctx: AuthContext) -> str | None:
+    try:
+        return str(ctx.assert_workspace())
+    except ValueError:
+        return None  # platform-wide super_admin
 
 
 @router.post("/chat")
 async def rag_chat(body: ChatRequest, ctx: AuthContext = Depends(get_current_user)) -> dict:
-    """Ask the knowledge base a question; get a grounded Arabic answer with
-    citations. Agents use this as their live-call co-pilot.
+    """Ask the knowledge base a question; get a grounded answer with citations.
+    Agents use this as their live-call co-pilot.
 
-    Visibility follows the same rules as data endpoints: agents query only
-    their workspace; admins their own; super admins everything (or narrowed
-    via X-Workspace-Id)."""
-    try:
-        workspace_id = ctx.assert_workspace()
-        scope = str(workspace_id)
-    except ValueError:
-        scope = None  # platform-wide super_admin
+    persona selects the response style (default / egyptian_friendly / formal /
+    concise / empathetic / technical); language forces the answer language
+    (arabic / english / spanish / german / french)."""
+    scope = _chat_scope(ctx)
 
     result = await asyncio.to_thread(
-        generate_answer, body.question, body.category, scope
+        generate_answer, body.question, body.category, scope, "qa", "",
+        body.persona, body.language,
     )
     return {
         "answer": result["answer"],
         "citations": result["citations"],
         "sources": result["sources"],
         "chunks_used": result["chunks_used"],
+        "persona": body.persona,
+        "language": body.language or "arabic",
         "workspace_scope": scope or "ALL",
+    }
+
+
+@router.post("/chat/voice")
+async def rag_chat_voice(
+    ctx: AuthContext = Depends(get_current_user),
+    file: UploadFile = File(...),
+    category: str | None = Form(default=None),
+    persona: str = Form(default="default"),
+    language: str | None = Form(default=None),
+) -> dict:
+    """Voice round-trip with the RAG assistant:
+    upload recorded speech → STT (Gemini) → RAG answer → TTS (ElevenLabs).
+    Returns the text answer + citations + a URL to the spoken reply."""
+    from outbound_ai.voice.voice_services import synthesize_to_cache, transcribe_audio_bytes
+
+    data = await file.read()
+    mime = file.content_type or "audio/mpeg"
+    question = await asyncio.to_thread(transcribe_audio_bytes, data, mime)
+    if not question:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Could not understand the recording — try again.")
+
+    scope = _chat_scope(ctx)
+    result = await asyncio.to_thread(
+        generate_answer, question, category, scope, "qa", "", persona, language
+    )
+
+    audio_path = await synthesize_to_cache(result["answer"], prefix="chat")
+    return {
+        "question": question,
+        "answer": result["answer"],
+        "citations": result["citations"],
+        "sources": result["sources"],
+        "persona": persona,
+        "language": language or "arabic",
+        "audio_url": f"/audio/{audio_path.name}" if audio_path else None,
     }

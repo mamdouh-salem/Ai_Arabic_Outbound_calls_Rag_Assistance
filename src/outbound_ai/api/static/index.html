@@ -179,8 +179,26 @@
       <div class="grid-2">
         <div class="panel">
           <div id="chat-log" class="code" style="min-height:320px;max-height:480px">Ask a question about the knowledge base…</div>
+          <audio id="chat-audio" controls class="hidden" style="width:100%;margin-top:10px"></audio>
         </div>
         <div class="panel narrow">
+          <label>Persona <span class="muted">(how the assistant responds)</span></label>
+          <select id="chat-persona">
+            <option value="default">default — professional MSA</option>
+            <option value="egyptian_friendly">Egyptian friendly 🇪🇬</option>
+            <option value="formal">formal — فصحى رسمية</option>
+            <option value="concise">concise — مختصر جدًا</option>
+            <option value="empathetic">empathetic — متعاطف</option>
+            <option value="technical">technical — دقة تقنية</option>
+          </select>
+          <label>Answer language</label>
+          <select id="chat-language">
+            <option value="arabic">العربية</option>
+            <option value="english">English</option>
+            <option value="spanish">Español</option>
+            <option value="german">Deutsch</option>
+            <option value="french">Français</option>
+          </select>
           <label>Category filter <span class="muted">(optional)</span></label>
           <select id="chat-category">
             <option value="">all categories</option>
@@ -188,8 +206,26 @@
           </select>
           <label>Question</label>
           <textarea id="chat-question" rows="3" dir="rtl" placeholder="اكتب سؤالك هنا..."></textarea>
-          <button class="btn primary" onclick="sendChat()">Ask 🤖</button>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn primary" style="flex:1" onclick="sendChat()">Ask 🤖</button>
+            <button class="btn" id="mic-btn" style="flex:1" onclick="toggleMic()">🎤 Ask by voice</button>
+          </div>
         </div>
+      </div>
+    </section>
+
+    <!-- ---------- DATA INSIGHTS (NL → SQL) ---------- -->
+    <section id="screen-data" class="screen hidden">
+      <h2>Data Insights</h2>
+      <p class="muted">Ask business-data questions in plain language — the LLM writes a validated read-only SQL and we run it. admin/super admin only.</p>
+      <div class="panel narrow">
+        <label>Question</label>
+        <textarea id="dq-question" rows="2" dir="rtl" placeholder="مثال: اعرض آخر 5 مكالمات متحوّلة مع مدتها"></textarea>
+        <button class="btn primary" onclick="runDataQuery()">🔍 Query the data</button>
+        <pre id="dq-sql" class="code hidden" style="margin-top:12px"></pre>
+      </div>
+      <div class="panel">
+        <table id="dq-table" class="tbl"></table>
       </div>
     </section>
 

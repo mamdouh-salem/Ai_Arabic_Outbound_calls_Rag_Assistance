@@ -112,6 +112,7 @@ const TABS = [
   { id: "tickets",    label: "Tickets",     roles: ["agent", "admin", "super_admin"] },
   { id: "calls",      label: "Calls",       roles: ["agent", "admin", "super_admin"] },
   { id: "kb",         label: "Knowledge Base", roles: ["admin", "super_admin"] },
+  { id: "data",       label: "Data Insights", roles: ["admin", "super_admin"] },
   { id: "users",      label: "Users",       roles: ["super_admin"] },
   { id: "callcenter", label: "Call Center", roles: ["admin", "super_admin"] },
 ];
@@ -130,6 +131,7 @@ function showScreen(id) {
     dashboard: loadDashboard, tickets: loadTickets, calls: loadCalls,
     kb: loadKb,
     chat: () => {},
+    data: () => {},
     users: () => Promise.all([loadUsers(), state.me.role === "super_admin" ? Promise.all([loadWorkspaces(), loadHierarchy()]) : Promise.resolve()]),
     callcenter: () => {},
   };
@@ -362,23 +364,111 @@ async function sendChat() {
   const q = document.getElementById("chat-question").value.trim();
   if (!q) return toast("Type a question first", true);
   const cat = document.getElementById("chat-category").value;
+  const persona = document.getElementById("chat-persona").value;
+  const language = document.getElementById("chat-language").value;
   const log = document.getElementById("chat-log");
   log.textContent += `\n\n🧑 You: ${q}\n⏳ thinking…`;
   log.scrollTop = log.scrollHeight;
   try {
     const res = await api("/kb/chat", { method: "POST", json: {
-      question: q, ...(cat ? { category: cat } : {}),
+      question: q, ...(cat ? { category: cat } : {}), persona,
+      ...(language && language !== "arabic" ? { language } : {}),
     }});
     const cites = (res.citations || [])
       .map(c => `[${c.index}] ${c.source} (score ${c.score})`)
       .join("\n");
-    log.textContent += `\n\n🤖 Assistant:\n${res.answer}` +
+    log.textContent += `\n\n🤖 Assistant [${res.persona}]:\n${res.answer}` +
       (res.citations?.length ? `\n\n📚 Citations:\n${cites}` : "\n\n(no KB sources matched)") +
       `\n— scope: ${res.workspace_scope}, chunks used: ${res.chunks_used}`;
     document.getElementById("chat-question").value = "";
     log.scrollTop = log.scrollHeight;
   } catch (e) {
     log.textContent = log.textContent.replace("⏳ thinking…", `❌ ${e.message}`);
+    toast(e.message, true);
+  }
+}
+
+/* voice round-trip: mic → STT → RAG → spoken reply */
+
+let mediaRecorder = null;
+let micChunks = [];
+
+async function toggleMic() {
+  const btn = document.getElementById("mic-btn");
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();          // onstop handler sends it
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => micChunks.push(e.data);
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      btn.textContent = "🎤 Ask by voice";
+      btn.classList.remove("danger");
+      const blob = new Blob(micChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      await sendVoice(blob);
+    };
+    mediaRecorder.start();
+    btn.textContent = "⏺ Recording… (click to send)";
+    btn.classList.add("danger");
+  } catch { toast("Microphone permission denied", true); }
+}
+
+async function sendVoice(blob) {
+  const log = document.getElementById("chat-log");
+  const cat = document.getElementById("chat-category").value;
+  const persona = document.getElementById("chat-persona").value;
+  const language = document.getElementById("chat-language").value;
+  log.textContent += `\n\n🧑 [voice] ⏳ transcribing + thinking…`;
+  log.scrollTop = log.scrollHeight;
+  const fd = new FormData();
+  fd.append("file", blob, "question.webm");
+  if (cat) fd.append("category", cat);
+  fd.append("persona", persona);
+  if (language && language !== "arabic") fd.append("language", language);
+  try {
+    const res = await api("/kb/chat/voice", { method: "POST", body: fd });
+    log.textContent = log.textContent.replace("⏳ transcribing + thinking…",
+                                              `🧑 [voice] ${res.question}`);
+    log.textContent += `\n\n🤖 Assistant:\n${res.answer}` +
+      (res.citations?.length ? `\n\n📚 Citations:\n${res.citations.map(c => `[${c.index}] ${c.source}`).join("\n")}` : "");
+    const player = document.getElementById("chat-audio");
+    if (res.audio_url) {
+      player.src = res.audio_url;
+      player.classList.remove("hidden");
+      player.play().catch(() => {});
+    }
+    log.scrollTop = log.scrollHeight;
+  } catch (e) {
+    log.textContent = log.textContent.replace("⏳ transcribing + thinking…", `❌ ${e.message}`);
+    toast(e.message, true);
+  }
+}
+
+/* ---------------- data insights (NL → SQL) ---------------- */
+
+async function runDataQuery() {
+  const q = document.getElementById("dq-question").value.trim();
+  if (!q) return toast("Type a question first", true);
+  const sqlBox = document.getElementById("dq-sql");
+  const table = document.getElementById("dq-table");
+  table.innerHTML = `<tr><td class="muted">⏳ running…</td></tr>`;
+  try {
+    const res = await api("/data/query", { method: "POST", json: { question: q } });
+    sqlBox.textContent = "-- generated SQL (validated, read-only)\n" + res.sql;
+    sqlBox.classList.remove("hidden");
+    if (!res.rows.length) { table.innerHTML = `<tr><td class="muted">No rows matched.</td></tr>`; return; }
+    const cols = Object.keys(res.rows[0]);
+    table.innerHTML =
+      `<thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>` +
+      res.rows.map(r => `<tr>${cols.map(c => `<td>${esc(r[c] ?? "")}</td>`).join("")}</tr>`).join("") +
+      `</tbody>`;
+    toast(`${res.row_count} row(s) returned`);
+  } catch (e) {
+    table.innerHTML = `<tr><td class="muted">—</td></tr>`;
     toast(e.message, true);
   }
 }

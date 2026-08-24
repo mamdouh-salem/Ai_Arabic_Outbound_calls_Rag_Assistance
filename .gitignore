@@ -42,3 +42,11 @@ Thumbs.db
 vonage_private.key
 *.key
 *.pem
+
+# virtual envs & runtime artifacts (never commit)
+.venv/
+.venv-studio/
+venv/
+.langgraph_api/
+audio_cache/
+call_reports.jsonl

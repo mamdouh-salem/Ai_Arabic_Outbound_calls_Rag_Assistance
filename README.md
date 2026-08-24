@@ -126,6 +126,30 @@ uv pip install -e ".[dev]"
 cp .env.example .env
 ```
 
+### Shared Supabase project (all team members)
+
+The team works against ONE shared Supabase project. The connection keys are
+**pre-filled in `.env.example`** — after `cp .env.example .env` you're already
+connected; nothing else to configure.
+
+> ⚠️ **Handle with care:**
+> - `SUPABASE_ANON_KEY` — safe: every write goes through RLS policies
+> - `SUPABASE_SERVICE_ROLE_KEY` — **bypasses ALL RLS**; never use it in
+>   frontend code, and never commit it anywhere else
+> - `DATABASE_URL` — direct Postgres with full access; same caution
+> - The repo must stay **private** while these are committed
+
+To apply the database schema on a fresh project, run the migrations in order
+in the SQL Editor:
+
+```
+db/migrations/001_base_schema.sql   → 003_multi_tenancy.sql
+→ 004_ticket_assignment.sql         → 005_call_reporting_fields.sql
+→ 006_call_status.sql               → db/seed/001_seed_workspace.sql
+```
+
+(002 is historical — its index and function are superseded by 001 and 003.)
+
 Run the tests (no API keys needed — the voice layer has fakes):
 
 ```bash
@@ -142,7 +166,7 @@ python scripts/smoke_test_graph_real.py  # same graph, real intent classificatio
 
 ---
 
-## Auth & multi-tenancy setup (Phase 2 — branch `oxAlpha`)
+## Auth & multi-tenancy setup (Phase 2)
 
 Implemented so far: `users` / `workspaces` / `workspace_members` tables with RLS,
 JWT verification middleware (`auth/middleware.py`), role guards
@@ -407,14 +431,38 @@ Supabase + live Vonage trial line. **75 unit tests green.**
   diagram, tickets/calls tables, KB manager, user & workspace management,
   call center, RAG chat
 
+**Done — latest RAG developments (manager requests):**
+- **Voice in the RAG chat** — `POST /kb/chat/voice`: record a question in the
+  console (mic button) → Gemini STT → grounded answer → ElevenLabs spoken
+  reply played back; shared `voice_services` module reused by the live-call flow
+- **Customizable personas** — six response styles selectable per request
+  (default / Egyptian friendly / formal / concise / empathetic / technical)
+- **Answer languages** — any persona × any language: Arabic (native),
+  English, Spanish, German, French; spoken replies follow the chosen language
+- **Structured data (NL → SQL)** — `POST /data/query` + "Data Insights" tab:
+  ask business-data questions in plain language; the LLM writes a SELECT over
+  the known schema, hard-validated (SELECT-only, single statement, forbidden
+  keywords, forced LIMIT) and executed read-only with a statement timeout
+- **Base schema versioned** — `001_base_schema.sql` reconstructed from the
+  live database (all four core tables, indexes, Arabic FTS trigger), verified
+  idempotent against production
+- **Workflow visualization** — `/workflow.png` served from the compiled graph
+  and embedded in the Dashboard; local LangGraph Studio wiring included
+  (`langgraph.json` + `graph/studio.py`, runs via `langgraph dev` — no deployment)
+
 ## Upcoming steps — by owner
+
+> **Teammate A (voice AI + RAG): COMPLETE.** Everything in the backend/agents/
+> RAG/voice scope is implemented, tested (97 unit tests) and verified live.
+> Remaining backend items below are optional polish, pick them up if/when
+> capacity allows.
 
 | Owner | Area | Next tasks |
 |---|---|---|
-| **Teammate A** *(voice AI + RAG — mostly done)* | Backend | Postgres-backed LangGraph checkpointer; `orchestration/` call queue (campaign scheduler, "call all due tickets", retries); email verification on sign-up; benchmark an Egyptian-dialect Whisper checkpoint for STT |
-| **Teammate B** | Frontend | Migrate this console SPA to React/Next.js (`web/`): componentized auth screens, RTL theming, campaign dashboard with "Call All Due", WebSocket live-call monitor, charts for reports; consume existing REST contracts as-is |
-| **Team Lead** | Integration | Review + merge this feature branch; register the auto-profile trigger (Dashboard → Triggers, see setup section above); production Vonage number + account upgrade |
-| **Teammate D** | Data/QA | Integration tests for the webhook stage machine (mocked Vonage events: answered/busy/no-answer/abandoned); expand `data/eval` RAG ground-truth set + `eval_rag`; FCR report queries over the calls table; regression suite for the negation/resolution logic |
+| **Teammate B** | Frontend | **Implement your styling** on the console SPA (`api/static/`): your own design system/theme over the existing screens, RTL polish for Arabic views, responsive layout, loading/empty states, then the React/Next.js migration (`web/`) when the design is approved. REST contracts stay as-is. |
+| **Teammate C** | Database | **Own the schema**: steward the migrations folder (001–006) as the single source of truth, write the seed-data set for multi-tenant testing, RLS policy audit (try to break isolation between two workspaces), add performance indexes for the reporting queries, document a backup/restore runbook. |
+| **Teammate D** | Quality | **Quality gate**: run + extend the 97-test suite, add integration tests for the call stage machine (mock Vonage events: answered/busy/no-answer/abandoned), regression tests for the negation/resolution logic, expand `data/eval` and re-run `eval_rag`, verify the NL→SQL guards (try injection patterns), sign off releases. |
+| **Team Lead** | Integration | Review + merge this branch into `main`; register the auto-profile trigger (Dashboard → Triggers); production Vonage number + account upgrade; rotate the shared Supabase keys if the repo ever goes public. |
 
 Known temporary workarounds (dev-only): customers share one phone number
 (trial Vonage restriction) with the unique constraint dropped — restore

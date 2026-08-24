@@ -10,11 +10,13 @@ without a database.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
-from outbound_ai.auth.dependencies import CurrentUser
+from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
 from outbound_ai.auth.models import AppRole, AuthContext
 from outbound_ai.db.service_client import get_service_client
 
@@ -104,3 +106,28 @@ async def list_calls(ctx: CurrentUser) -> list[dict]:
             query = query.eq(column, value)
     res = query.execute()
     return res.data or []
+
+
+# ---------------------------------------------------------------------------
+# Natural-language → SQL over the business data (structured-data RAG)
+# ---------------------------------------------------------------------------
+
+class DataQueryRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/data/query")
+async def data_query(body: DataQueryRequest, ctx: AdminOrAbove) -> dict:
+    """Ask questions about the BUSINESS DATA in plain language (Arabic or
+    English) — the LLM writes a validated read-only SELECT, we execute it
+    with a timeout and return the rows + the generated SQL.
+
+    admin/super_admin only; agents cannot query business data."""
+    from outbound_ai.rag.sql_rag import run_sql_query
+
+    try:
+        return await asyncio.to_thread(run_sql_query, body.question)
+    except ValueError as exc:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
