@@ -1,8 +1,9 @@
 """User management API — hierarchical authority model.
 
 Authority rules (as specified by product owner):
-  super_admin -> creates users of ANY role (admins included), sees everyone
-  admin       -> sees users in their own workspace only
+  super_admin -> creates users of ANY role, in ANY workspace; sees everyone
+  admin       -> creates AGENTS inside his OWN workspace only (role+workspace
+                 forced server-side); sees users of his own workspace
   agent       -> no access to any management endpoint (403 at dependency layer)
 """
 from __future__ import annotations
@@ -45,14 +46,30 @@ class CreatedUserResponse(BaseModel):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=CreatedUserResponse)
-async def create_user(body: CreateUserRequest, ctx: Annotated[AuthContext, Depends(require_super_admin)]) -> dict:
+async def create_user(body: CreateUserRequest, ctx: AdminOrAbove) -> dict:
     """Create a Supabase auth account + profile + (optional) workspace membership.
 
-    super_admin only. If `password` is omitted a strong one is generated and
-    returned exactly once — it cannot be retrieved later."""
+    Authority rules:
+      super_admin -> any role, ANY workspace (workspace optional for himself)
+      admin       -> 'agent' role ONLY, forced into his OWN workspace
+                     (admins never create admins — super admin does)
+    If `password` is omitted a strong one is generated and returned exactly
+    once — it cannot be retrieved later."""
     sb = get_service_client()
 
-    if body.role in ("admin", "agent") and body.workspace_id is None:
+    if ctx.role == AppRole.admin:
+        # workspace admins: agents only, own workspace only — enforced, not trusted
+        if body.role != "agent":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Workspace admins can only create 'agent' users. "
+                       "Only the super admin creates admins.",
+            )
+        if not ctx.workspace_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Admin context has no workspace.")
+        body.workspace_id = ctx.workspace_id  # force own workspace, ignore payload
+    elif body.role in ("admin", "agent") and body.workspace_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"role '{body.role}' requires a workspace_id.",

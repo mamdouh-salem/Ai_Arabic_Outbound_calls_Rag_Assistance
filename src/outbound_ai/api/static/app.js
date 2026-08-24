@@ -113,7 +113,7 @@ const TABS = [
   { id: "calls",      label: "Calls",       roles: ["agent", "admin", "super_admin"] },
   { id: "kb",         label: "Knowledge Base", roles: ["admin", "super_admin"] },
   { id: "data",       label: "Data Insights", roles: ["admin", "super_admin"] },
-  { id: "users",      label: "Users",       roles: ["super_admin"] },
+  { id: "users",      label: "Users",       roles: ["admin", "super_admin"] },
   { id: "callcenter", label: "Call Center", roles: ["admin", "super_admin"] },
 ];
 
@@ -127,6 +127,27 @@ function showScreen(id) {
   const up = document.getElementById("chat-upload-panel");
   if (up) up.style.display =
     ["admin", "super_admin"].includes(state.me.role) ? "" : "none";
+  // users screen: super-only panels hidden from admins; admins create
+  // agents ONLY inside their own workspace (UI mirrors server enforcement)
+  if (id === "users") {
+    const isSuper = state.me.role === "super_admin";
+    const wsPanel = document.getElementById("panel-workspaces");
+    const hiPanel = document.getElementById("panel-hierarchy");
+    if (wsPanel) wsPanel.style.display = isSuper ? "" : "none";
+    if (hiPanel) hiPanel.style.display = isSuper ? "" : "none";
+    const nuRole = document.getElementById("nu-role");
+    const nuWs = document.getElementById("nu-workspace");
+    if (state.me.role === "admin") {
+      nuRole.value = "agent";
+      [...nuRole.options].forEach(o => { o.disabled = o.value !== "agent"; });
+      nuWs.disabled = true;
+      nuWs.placeholder = "your own workspace (automatic)";
+    } else {
+      [...nuRole.options].forEach(o => { o.disabled = false; });
+      nuWs.disabled = false;
+      nuWs.placeholder = "aaaaaaaa-0000-0000-0000-000000000001";
+    }
+  }
   const loaders = {
     dashboard: loadDashboard, tickets: loadTickets, calls: loadCalls,
     kb: loadKb,
