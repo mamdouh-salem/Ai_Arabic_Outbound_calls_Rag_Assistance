@@ -24,7 +24,7 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50">
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 w-80 p-8 bg-white rounded-lg shadow">
-        <h1 className="text-2xl font-semibold text-center">Log In</h1>
+        <h1 className="text-2xl font-semibold text-center text-black">Log In</h1>
         <input
           type="email"
           placeholder="Email"

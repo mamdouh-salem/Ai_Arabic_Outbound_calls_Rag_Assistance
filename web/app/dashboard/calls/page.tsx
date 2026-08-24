@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../supabaseClient";
+import { apiFetch } from "../../apiClient";
 
 type Call = {
   id: string;
@@ -18,18 +18,14 @@ export default function CallsPage() {
 
   useEffect(() => {
     async function fetchCalls() {
-      const { data, error } = await supabase
-        .from("calls")
-        .select("id, customer_id, call_outcome, intent, created_at")
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (error) {
-        setError(error.message);
-      } else {
+      try {
+        const data = await apiFetch("/calls");
         setCalls(data || []);
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
     fetchCalls();
   }, []);
@@ -50,7 +46,7 @@ export default function CallsPage() {
             </tr>
           </thead>
           <tbody>
-            {!loading && calls.length === 0 && (
+            {!loading && calls.length === 0 && !error && (
               <tr>
                 <td colSpan={4} className="p-6 text-center text-zinc-400">
                   No calls yet.

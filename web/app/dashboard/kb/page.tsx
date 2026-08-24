@@ -1,35 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../supabaseClient";
+import { apiFetch } from "../../apiClient";
 
-type Chunk = {
-  id: string;
-  content: string;
-  created_at: string;
+type Document = {
+  source_name: string;
+  chunk_count?: number;
 };
 
 export default function KBPage() {
-  const [chunks, setChunks] = useState<Chunk[]>([]);
+  const [docs, setDocs] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    async function fetchChunks() {
-      const { data, error } = await supabase
-        .from("knowledge_base_chunks")
-        .select("id, content, created_at")
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      if (error) {
-        setError(error.message);
-      } else {
-        setChunks(data || []);
+    async function fetchDocs() {
+      try {
+        const data = await apiFetch("/kb/documents");
+        setDocs(data || []);
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
-    fetchChunks();
+    fetchDocs();
   }, []);
 
   return (
@@ -40,21 +35,21 @@ export default function KBPage() {
       </button>
       {loading && <p className="text-zinc-500">Loading...</p>}
       {error && <p className="text-red-600 text-sm">{error}</p>}
-      {!loading && !error && chunks.length === 0 && (
+      {!loading && !error && docs.length === 0 && (
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow p-6 text-zinc-500">
           No documents uploaded yet.
         </div>
       )}
-      {chunks.length > 0 && (
+      {docs.length > 0 && (
         <div className="flex flex-col gap-3">
-          {chunks.map((c) => (
-            <div key={c.id} className="bg-white dark:bg-zinc-900 rounded-lg shadow p-4">
-              <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-3">
-                {c.content}
+          {docs.map((d) => (
+            <div key={d.source_name} className="bg-white dark:bg-zinc-900 rounded-lg shadow p-4">
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                {d.source_name}
               </p>
-              <p className="text-xs text-zinc-400 mt-2">
-                {new Date(c.created_at).toLocaleDateString()}
-              </p>
+              {d.chunk_count !== undefined && (
+                <p className="text-xs text-zinc-400 mt-1">{d.chunk_count} chunks</p>
+              )}
             </div>
           ))}
         </div>

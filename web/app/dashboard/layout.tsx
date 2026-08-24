@@ -14,7 +14,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="min-h-screen flex">
       <nav className="w-56 bg-white border-r p-4 flex flex-col gap-1">
-        <h2 className="font-semibold text-lg mb-4 px-2">Outbound AI</h2>
+        <h2 className="font-semibold text-lg mb-4 px-2 text-black">Outbound AI</h2>
         {links.map((link) => (
           <Link
             key={link.href}
