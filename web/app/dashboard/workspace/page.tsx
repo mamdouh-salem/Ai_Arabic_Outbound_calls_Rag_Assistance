@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useIdentity } from "../layout";
 import {
   createUser, getHierarchy, listUsers, listWorkspaces,
-  createWorkspace, setPlatformRole,
+  createWorkspace, resetUserPassword, setPlatformRole,
 } from "../../lib/console";
 
 export default function WorkspacePage() {
@@ -41,7 +41,8 @@ export default function WorkspacePage() {
     try {
       const res: any = await createUser({
         email: email.trim(), display_name: name.trim(), role,
-        ...(wsId.trim() && role !== "agent" ? { workspace_id: wsId.trim() } : {}),
+        // send workspace for ANY role when provided (agents need it too!)
+        ...(wsId.trim() ? { workspace_id: wsId.trim() } : {}),
         ...(password ? { password } : {}),
       });
       setCreated(res);
@@ -55,6 +56,20 @@ export default function WorkspacePage() {
 
   async function promote(id: string) {
     try { await setPlatformRole(id, "admin"); load(); } catch (e: any) { alert(e.message); }
+  }
+
+  async function resetPwd(id: string, email: string) {
+    const newPwd = prompt(
+      `Set a NEW password for ${email}\n(leave empty to auto-generate one):`);
+    if (newPwd === null) return;              // cancelled
+    if (newPwd && newPwd.length < 8)
+      return alert("Password must be at least 8 characters");
+    try {
+      const res: any = await resetUserPassword(id, newPwd || undefined);
+      if (res.generated_password)
+        alert(`✅ Password reset.\nAuto-generated password (shown ONCE):\n\n${res.generated_password}`);
+      else alert("✅ Password updated.");
+    } catch (e: any) { alert("❌ " + e.message); }
   }
 
   async function handleCreateWs() {
@@ -121,6 +136,14 @@ export default function WorkspacePage() {
                       <button onClick={() => promote(u.id)}
                         className="text-xs border border-zinc-300 rounded px-2 py-1 hover:bg-zinc-100">
                         promote
+                      </button>
+                    </td>
+                  )}
+                  {isSuper && (
+                    <td className="p-2">
+                      <button onClick={() => resetPwd(u.id, u.email)}
+                        className="text-xs border border-zinc-300 rounded px-2 py-1 hover:bg-zinc-100">
+                        🔑 reset pwd
                       </button>
                     </td>
                   )}

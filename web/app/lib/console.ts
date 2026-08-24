@@ -112,6 +112,12 @@ export const setPlatformRole = (userId: string, role: string) =>
   apiFetch(`/admin/users/${userId}/platform-role?new_role=${role}`, {
     method: "PATCH",
   });
+export function resetUserPassword(userId: string, newPassword?: string) {
+  return apiFetch(`/admin/users/${userId}/password`, {
+    method: "PATCH",
+    body: JSON.stringify({ ...(newPassword ? { new_password: newPassword } : {}) }),
+  });
+}
 export const listWorkspaces = () => apiFetch("/admin/workspaces");
 export function createWorkspace(body: {
   name: string;

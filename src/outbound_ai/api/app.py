@@ -449,7 +449,8 @@ async def event(request: Request):
     status = (b.get("status") or "").lower()
     conv = b.get("conversation_uuid")
     ctx = _adopt_conversation(conv)
-    log.info("vonage_event", status=status, known=ctx is not None)
+    log.info("vonage_event", status=status, known=ctx is not None,
+             **({"reason": b["reason"]} if b.get("reason") else {}))
 
     if ctx is not None and status:
         mapping = {"started": "dialing", "ringing": "ringing", "answered": "answered"}
