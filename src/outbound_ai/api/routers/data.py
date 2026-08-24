@@ -1,0 +1,133 @@
+"""Data visibility API — role-hierarchical access to tickets and calls.
+
+Rules:
+  agent       -> ONLY rows assigned to them (inside their workspace)
+  admin       -> every row in their workspace
+  super_admin -> everything; X-Workspace-Id header narrows to one workspace
+
+The filter resolution lives in pure functions below so it's unit-testable
+without a database.
+"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
+
+from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
+from outbound_ai.auth.models import AppRole, AuthContext
+from outbound_ai.db.service_client import get_service_client
+
+router = APIRouter(tags=["data"])
+
+
+def visible_ticket_filters(ctx: AuthContext) -> dict[str, str] | None:
+    """Supabase equality filters for tickets the caller may see.
+
+    None means "no filter" (see everything). Raises ValueError when an
+    admin/super_admin context lacks a workspace where one is required.
+    """
+    match ctx.role:
+        case AppRole.agent:
+            filters = {"assigned_to": str(ctx.user_id)}
+            if ctx.workspace_id:
+                filters["workspace_id"] = str(ctx.workspace_id)
+            return filters
+        case AppRole.admin:
+            ws = ctx.assert_workspace()  # admins are always workspace-scoped
+            return {"workspace_id": str(ws)}
+        case _:
+            # super_admin: scoped only when a header narrowed the context
+            if ctx.workspace_id:
+                return {"workspace_id": str(ctx.workspace_id)}
+            return None
+
+
+def visible_call_filters(
+    ctx: AuthContext,
+    *,
+    fetch_assigned_ticket_ids: Any = None,
+) -> dict[str, Any] | None:
+    """Filters for calls visible to the caller.
+
+    Agents have no direct column on calls — visibility derives from their
+    assigned tickets, so the caller injects a lookup callable returning the
+    caller's ticket ids (kept out of this function to stay DB-free).
+    """
+    match ctx.role:
+        case AppRole.agent:
+            ticket_ids = list(fetch_assigned_ticket_ids()) if fetch_assigned_ticket_ids else []
+            if not ticket_ids:
+                return {"ticket_id": ["__none__"]}  # matches nothing -> empty result
+            return {"ticket_id": ticket_ids}
+        case _:
+            return visible_ticket_filters(ctx)
+
+
+@router.get("/tickets")
+async def list_tickets(ctx: CurrentUser) -> list[dict]:
+    sb = get_service_client()
+    # join customers for name+phone so the UI can show who gets dialed
+    query = sb.table("tickets").select("*, customers(name, phone)")
+    for column, value in (visible_ticket_filters(ctx) or {}).items():
+        query = query.eq(column, value)
+    res = query.execute()
+    rows = res.data or []
+    # flatten the joined customer onto each ticket for simple frontend use
+    for r in rows:
+        c = r.pop("customers", None) or {}
+        r["customer_name"] = c.get("name")
+        r["customer_phone"] = c.get("phone")
+    return rows
+
+
+@router.get("/calls")
+async def list_calls(ctx: CurrentUser) -> list[dict]:
+    sb = get_service_client()
+
+    def assigned_ids() -> list[str]:
+        q = sb.table("tickets").select("id").eq("assigned_to", str(ctx.user_id))
+        if ctx.workspace_id:
+            q = q.eq("workspace_id", str(ctx.workspace_id))
+        return [row["id"] for row in (q.execute().data or [])]
+
+    filters = visible_call_filters(ctx, fetch_assigned_ticket_ids=assigned_ids)
+    if filters is None:
+        res = sb.table("calls").select("*").execute()
+        return res.data or []
+
+    query = sb.table("calls").select("*")
+    for column, value in filters.items():
+        if isinstance(value, list):
+            query = query.in_(column, value)
+        else:
+            query = query.eq(column, value)
+    res = query.execute()
+    return res.data or []
+
+
+# ---------------------------------------------------------------------------
+# Natural-language → SQL over the business data (structured-data RAG)
+# ---------------------------------------------------------------------------
+
+class DataQueryRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/data/query")
+async def data_query(body: DataQueryRequest, ctx: AdminOrAbove) -> dict:
+    """Ask questions about the BUSINESS DATA in plain language (Arabic or
+    English) — the LLM writes a validated read-only SELECT, we execute it
+    with a timeout and return the rows + the generated SQL.
+
+    admin/super_admin only; agents cannot query business data."""
+    from outbound_ai.rag.sql_rag import run_sql_query
+
+    try:
+        return await asyncio.to_thread(run_sql_query, body.question)
+    except ValueError as exc:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

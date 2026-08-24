@@ -126,6 +126,30 @@ uv pip install -e ".[dev]"
 cp .env.example .env
 ```
 
+### Shared Supabase project (all team members)
+
+The team works against ONE shared Supabase project. The connection keys are
+**pre-filled in `.env.example`** — after `cp .env.example .env` you're already
+connected; nothing else to configure.
+
+> ⚠️ **Handle with care:**
+> - `SUPABASE_ANON_KEY` — safe: every write goes through RLS policies
+> - `SUPABASE_SERVICE_ROLE_KEY` — **bypasses ALL RLS**; never use it in
+>   frontend code, and never commit it anywhere else
+> - `DATABASE_URL` — direct Postgres with full access; same caution
+> - The repo must stay **private** while these are committed
+
+To apply the database schema on a fresh project, run the migrations in order
+in the SQL Editor:
+
+```
+db/migrations/001_base_schema.sql   → 003_multi_tenancy.sql
+→ 004_ticket_assignment.sql         → 005_call_reporting_fields.sql
+→ 006_call_status.sql               → db/seed/001_seed_workspace.sql
+```
+
+(002 is historical — its index and function are superseded by 001 and 003.)
+
 Run the tests (no API keys needed — the voice layer has fakes):
 
 ```bash
@@ -138,6 +162,77 @@ Sanity-check config and the graph before touching anything else:
 python scripts/test_settings.py          # settings.py loads .env correctly, tracing env vars export
 python scripts/smoke_test_graph.py       # graph runs end-to-end against fake voice/KB/intent adapters
 python scripts/smoke_test_graph_real.py  # same graph, real intent classification + real RAG retrieval/generation
+```
+
+---
+
+## Auth & multi-tenancy setup (Phase 2)
+
+Implemented so far: `users` / `workspaces` / `workspace_members` tables with RLS,
+JWT verification middleware (`auth/middleware.py`), role guards
+(`auth/dependencies.py`: `get_current_user`, `require_admin_or_above`,
+`require_super_admin`), `/health/auth` probe endpoint, 26 unit tests.
+
+### One-time database setup (Supabase SQL Editor)
+
+1. Run `db/migrations/003_multi_tenancy.sql`
+   - Adds `workspace_id` to `customers`/`tickets`/`knowledge_base_chunks`/`calls`,
+     backfills everything into the `default` workspace, enables RLS, replaces
+     `match_chunks()` with a workspace-aware version.
+   - Note: no FK to `auth.users` — the SQL Editor role cannot create DDL
+     referencing the auth schema (ERROR 42501). Integrity is handled by the
+     profile hook + JWT middleware instead.
+2. Run `db/seed/001_seed_workspace.sql` (idempotent).
+
+### Environment
+
+```bash
+# .env — find the value in Dashboard → Project Settings → API → JWT Secret
+SUPABASE_JWT_SECRET=<your-jwt-secret>
+```
+
+### First super_admin bootstrap
+
+There is no sign-up endpoint yet (next phase of work), so create the first
+account manually:
+
+1. Dashboard → Authentication → Users → **Add user** (email + password).
+2. Copy the user's UUID, then in the SQL Editor:
+
+   ```sql
+   insert into users (id, email, display_name, platform_role)
+   values ('<auth-user-uuid>', '<email>', '<name>', 'super_admin')
+   on conflict (id) do update set platform_role = 'super_admin';
+   ```
+
+3. Optional — also make them admin of the default workspace (needed for
+   workspace-scoped writes even as super_admin when using the anon key):
+
+   ```sql
+   insert into workspace_members (workspace_id, user_id, role)
+   values ('aaaaaaaa-0000-0000-0000-000000000001', '<auth-user-uuid>', 'admin')
+   on conflict (workspace_id, user_id) do update set role = 'admin';
+   ```
+
+### Auto-profile trigger (optional, recommended)
+
+New sign-ups won't get a `public.users` row automatically until this trigger
+exists (cannot be created from the SQL Editor):
+
+Dashboard → Database → Triggers → New trigger → table `auth.users`,
+event `INSERT`, timing AFTER, function `public.handle_new_auth_user`.
+Or via CLI:
+
+```bash
+supabase db execute --sql "create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_auth_user();"
+```
+
+### Verifying auth works
+
+```bash
+uvicorn outbound_ai.api.app:app --reload   # or scripts/run_api if present
+curl http://localhost:8000/health                       # unauthenticated → {"status":"ok"}
+curl http://localhost:8000/health/auth -H "Authorization: Bearer <jwt>"   # → identity JSON
 ```
 
 ---
@@ -280,49 +375,118 @@ threading through every table (Teammate C + Teammate D).
 
 ---
 
-## Status
+## Status (updated — Phase 2 backend & voice agent COMPLETE)
 
-**Done:**
+Everything below is merged into the working tree and verified against a live
+Supabase + live Vonage trial line. **75 unit tests green.**
+
+**Done — original phase 1:**
 - Project scaffolding, configuration, Arabic normalization
 - Voice layer ports (`STTPort` / `TTSPort` / `EndpointingPort`) + Whisper, ElevenLabs, and
-  push-to-talk adapters, streaming sentence chunker, static prompt cache, fakes for testing.
-  35 unit tests, no network.
-- Database schema — Supabase tables for `customers`, `tickets`, `knowledge_base_chunks`
-  (embedding `vector(768)`, `metadata jsonb` for category, `fts_tokens tsvector`), seeded with
-  test data across `accounts` / `routers` / `billing`
-- Knowledge base — handcrafted Arabic SOP documents, ingested with metadata
-- RAG pipeline — hybrid search (`match_chunks` SQL function: dense pgvector + sparse full-text,
-  fused with RRF), metadata category filtering, local embeddings, context building, grounded
-  generation. Generation provider is pluggable (local Qwen2.5-7B / OpenAI / Gemini) via one
-  config value, no code changes needed to swap
-- LangGraph skeleton — `state`/`edges`/`nodes`/`build`/`deps` wired with dependency injection
-  (voice ports, KB retrieval, intent classification all injected, not hardcoded), compiled graph
-  with conditional routing (`outbound_call → intent_classifier → kb_assist/routing → reporting`)
-- LangSmith tracing — confirmed working end-to-end, traces visible per-node
-- `agents/intent_classifier.py` and `agents/kb_assist.py` — implemented and proven against a real
-  LLM (Gemini) and real Supabase retrieval, not just fakes; full run verified correct
-  (intent classification → grounded retrieval → generated Arabic answer → correct call outcome)
-- Resolved/unresolved classification bug fixed (state-node logic error, not a transcription issue)
-- LangGraph node diagram generation via `compiled_graph.get_graph().draw_mermaid_png()`
+  push-to-talk adapters, streaming sentence chunker, fakes for testing
+- Database schema — `customers`, `tickets`, `knowledge_base_chunks`
+  (`vector(768)` embeddings, category metadata, FTS tokens), seeded data
+- RAG pipeline — hybrid search (dense pgvector + sparse full-text fused with RRF),
+  metadata filtering, grounded generation; pluggable provider (local Qwen / OpenAI / Gemini)
+- LangGraph workflow — state/edges/nodes/build with dependency injection,
+  conditional routing, diagram in `graph_workflow.png` (also served at `/workflow.png`)
+- `agents/intent_classifier.py`, `agents/kb_assist.py` — proven against real LLM + real retrieval
 
-**In progress / next steps, roughly in order:**
-1. **Auth** — Supabase Auth integration, JWT middleware in FastAPI, sign-up/login flow.
-2. **Multi-tenancy schema** — `workspaces` + `users`/`workspace_members` tables, `workspace_id`
-   threaded through `customers`/`tickets`/`knowledge_base_chunks`, RLS policies, role checks.
-3. **RAG document upload + citations** — ingestion API endpoint, citation metadata surfaced
-   through generation, frontend rendering of sources.
-4. **Voice AI dialect fixes** — swap in an Egyptian-tuned Whisper checkpoint, tighten Egyptian
-   colloquial prompting in `prompts/`, pin/validate ElevenLabs Egyptian voices (or evaluate an
-   Arabic-first TTS alternative).
-5. **`orchestration/` call queue** — campaign scheduling, concurrency limits, retries, webhook
-   idempotency, sitting above the LangGraph rather than inside it.
-6. **Vonage telephony adapter** — concrete implementation of the telephony/voice ports against
-   real Vonage Voice API calls (JWT auth, NCCO answer webhook, event webhook).
-7. **PostgreSQL-backed LangGraph checkpointer** — replaces in-process `MemorySaver`; required for
-   the call queue and human-handoff `interrupt()` to survive restarts/retries.
-8. **`agents/routing.py`** — real escalation/handoff logic, replacing the current stub.
-9. **`agents/outbound_call.py`** and **`agents/reporting.py`** — split out of `graph/nodes.py`
-   into their own agent modules with dedicated, versioned prompts.
-10. **Real web frontend (`web/`)** — React/Next.js, replacing Gradio as the product UI.
-11. **Local Qwen2.5-7B generation path** — implemented in `common/local_llm.py` but not yet
-    verified end-to-end; Gemini remains the active provider for dev/testing meanwhile.
+**Done — phase 2 (this branch):**
+- **Multi-tenancy DB** — migrations 003–006: `workspaces`, `users`,
+  `workspace_members` with RLS policies, `workspace_id` threaded through every
+  tenant table + backfilled; SQL-Editor-safe (no auth-schema DDL)
+- **Auth foundation** — Supabase JWT verification middleware supporting BOTH
+  legacy HS256 secret and current ES256 asymmetric keys via JWKS; role guards
+  (`get_current_user`, `require_admin_or_above`, `require_super_admin`);
+  open self sign-up endpoint; auto-profile hook function
+- **User management** — super admin creates admin/agent accounts (Supabase Auth
+  admin API, one-time generated passwords); platform-role changes; hierarchical
+  user listing; platform hierarchy tree (workspace → admins → agents)
+- **Workspace management** — create/list workspaces; add members; super-admin
+  workspace scoping bar across all data endpoints (`X-Workspace-Id`)
+- **KB management API + console UI** — upload `.txt/.md/.pdf/.docx/.csv/.json`
+  (or pasted Arabic text) → chunk → embed → store, workspace-scoped; list/delete
+- **RAG chat assistant with citations** — `/kb/chat`: grounded Arabic answers +
+  per-chunk citations (index/source/score/snippet), role-scoped retrieval
+- **Live outbound calling (Vonage)** — one-click "Call" from the Tickets tab;
+  greeting with time-of-day + customer name + ticket title; guided multi-stage
+  conversation: resolution check → clarification request → KB similarity search
+  → Egyptian-dialect troubleshooting step ("لما تخلص قولّي خلصت") → completion
+  confirmation → final verdict → thanks or human transfer; negation-aware
+  resolution detection ("متحلتش" ≠ "اتحلت"); honest KB dead-end handoff
+- **Voice** — ElevenLabs audio streamed into live calls (single consistent
+  voice; Vonage TTS only as emergency fallback); looping hold message that
+  never outlives processing
+- **Reliability fixes** — mid-call NCCO transfer changes the conversation uuid:
+  new conversations are now adopted so stage-2 answers always arrive; startup
+  warm-up pre-loads the embedding model + hold audio; whole stage pipeline is
+  failure-proofed (apology + transfer + report row on any error)
+- **Reporting** — call reports with connection status (answered/busy/no-answer/
+  rejected/failed), start/end timestamps, duration, transcript, KB answer,
+  sources; outcome resolved ONLY when the customer confirms it; detailed Calls
+  table view
+- **Browser console SPA** — served by FastAPI at `/`: login/sign-up screens,
+  role-aware navigation (agent/admin/super admin), dashboard with workflow
+  diagram, tickets/calls tables, KB manager, user & workspace management,
+  call center, RAG chat
+
+**Done — latest RAG developments (manager requests):**
+- **Voice in the RAG chat** — `POST /kb/chat/voice`: record a question in the
+  console (mic button) → Gemini STT → grounded answer → ElevenLabs spoken
+  reply played back; shared `voice_services` module reused by the live-call flow
+- **Customizable personas** — six response styles selectable per request
+  (default / Egyptian friendly / formal / concise / empathetic / technical)
+- **Answer languages** — any persona × any language: Arabic (native),
+  English, Spanish, German, French; spoken replies follow the chosen language
+- **Structured data (NL → SQL)** — `POST /data/query` + "Data Insights" tab:
+  ask business-data questions in plain language; the LLM writes a SELECT over
+  the known schema, hard-validated (SELECT-only, single statement, forbidden
+  keywords, forced LIMIT) and executed read-only with a statement timeout
+- **Base schema versioned** — `001_base_schema.sql` reconstructed from the
+  live database (all four core tables, indexes, Arabic FTS trigger), verified
+  idempotent against production
+- **Workflow visualization** — `/workflow.png` served from the compiled graph
+  and embedded in the Dashboard; local LangGraph Studio wiring included
+  (`langgraph.json` + `graph/studio.py`, runs via `langgraph dev` — no deployment)
+
+## Upcoming steps — by owner
+
+> **Teammate A (voice AI + RAG): COMPLETE.** Everything in the backend/agents/
+> RAG/voice scope is implemented, tested (97 unit tests) and verified live.
+> Remaining backend items below are optional polish, pick them up if/when
+> capacity allows.
+
+| Owner | Area | Next tasks |
+|---|---|---|
+| **Teammate B** | Frontend | **Implement your styling** on the console SPA (`api/static/`): your own design system/theme over the existing screens, RTL polish for Arabic views, responsive layout, loading/empty states, then the React/Next.js migration (`web/`) when the design is approved. REST contracts stay as-is. |
+| **Teammate C** | Database | **Own the schema**: steward the migrations folder (001–006) as the single source of truth, write the seed-data set for multi-tenant testing, RLS policy audit (try to break isolation between two workspaces), add performance indexes for the reporting queries, document a backup/restore runbook. |
+| **Teammate D** | Quality | **Quality gate**: run + extend the 97-test suite, add integration tests for the call stage machine (mock Vonage events: answered/busy/no-answer/abandoned), regression tests for the negation/resolution logic, expand `data/eval` and re-run `eval_rag`, verify the NL→SQL guards (try injection patterns), sign off releases. |
+| **Team Lead** | Integration | Review + merge this branch into `main`; register the auto-profile trigger (Dashboard → Triggers); production Vonage number + account upgrade; rotate the shared Supabase keys if the repo ever goes public. |
+
+Known temporary workarounds (dev-only): customers share one phone number
+(trial Vonage restriction) with the unique constraint dropped — restore
+`customers_phone_key` before production; `docs_url` enabled while `APP_ENV=dev`.
+
+### Workflow diagram & interactive LangGraph Studio (local — no deployment)
+
+- **Diagram:** served at `/workflow.png` and embedded in the console Dashboard;
+  generated straight from the compiled graph — no LangSmith login required.
+- **Interactive Studio:** step through nodes, inspect/edit state, replay runs —
+  runs entirely on your machine via the dev server (`langgraph.json` registers
+  `outbound_agent` → `src/outbound_ai/graph/studio.py`, which wires REAL Gemini
+  intent classification and REAL Supabase RAG; only audio ports are silent).
+
+  ```bash
+  # one-time — keep it in a SEPARATE venv: langgraph-cli pulls a newer
+  # langchain-core than the pinned API dependencies in .venv tolerate.
+  rm -rf .venv-studio
+  python3 -m venv .venv-studio
+  source .venv-studio/bin/activate
+  pip install -e ".[dev]" "langgraph-cli[inmem]"
+
+  langgraph dev   # then open the printed Studio URL (localhost:2024 backend)
+  ```
+
+  Local dev mode needs **no LangGraph Platform deployment** — that's only for
+  hosted/persistent deployments later on.
