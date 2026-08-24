@@ -44,40 +44,40 @@ export default function KbPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="p-8 space-y-4">
       <h1 className="text-2xl font-semibold">Knowledge Base</h1>
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 space-y-3">
           <h3 className="font-semibold">Upload document</h3>
           <input value={category} onChange={(e) => setCategory(e.target.value)}
             placeholder="category * (billing / routers / accounts …)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm" />
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
           <input value={title} onChange={(e) => setTitle(e.target.value)}
             placeholder="title (defaults to filename)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm" />
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
           <input ref={fileRef} type="file" accept=".txt,.md,.markdown,.pdf,.docx,.csv,.json"
             className="w-full text-sm" />
           <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={6} dir="rtl"
             placeholder="…أو الصق النص العربي هنا"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm" />
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
           <button onClick={upload} disabled={busy}
-            className="bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm">
+            className="bg-black text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">
             {busy ? "Ingesting…" : "⬆ Upload & Ingest"}
           </button>
-          {msg && <p className="text-xs text-zinc-300">{msg}</p>}
+          {msg && <p className="text-xs text-zinc-700">{msg}</p>}
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+        <div className="bg-white border border-zinc-200 rounded-xl p-5">
           <h3 className="font-semibold mb-3">Documents in workspace</h3>
           <table className="w-full text-sm">
             <tbody>
               {docs.map((d) => (
-                <tr key={d.source} className="border-b border-zinc-800/60">
+                <tr key={d.source} className="border-b border-zinc-100">
                   <td className="p-2" dir="rtl">{d.source}</td>
                   <td className="p-2">{d.chunks}</td>
                   <td className="p-2">{d.category ?? "—"}</td>
                   <td className="p-2">
                     <button onClick={() => remove(d.source)}
-                      className="bg-red-600/80 hover:bg-red-500 text-white text-xs px-2.5 py-1 rounded">
+                      className="bg-red-600 text-white text-xs px-2.5 py-1 rounded hover:bg-red-500">
                       delete
                     </button>
                   </td>

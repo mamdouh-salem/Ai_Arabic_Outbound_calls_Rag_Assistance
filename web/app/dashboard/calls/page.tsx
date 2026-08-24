@@ -4,13 +4,13 @@ import { useEffect, useState } from "react";
 import { getCalls } from "../../lib/console";
 
 const STATUS: Record<string, string> = {
-  answered: "bg-green-500/20 text-green-300",
+  answered: "bg-green-100 text-green-700",
   dialing: "text-zinc-500",
-  ringing: "bg-amber-500/20 text-amber-300",
-  busy: "bg-red-500/20 text-red-300",
-  rejected: "bg-red-500/20 text-red-300",
-  failed: "bg-red-500/20 text-red-300",
-  timeout: "bg-amber-500/20 text-amber-300",
+  ringing: "bg-amber-100 text-amber-700",
+  busy: "bg-red-100 text-red-700",
+  rejected: "bg-red-100 text-red-700",
+  failed: "bg-red-100 text-red-700",
+  timeout: "bg-amber-100 text-amber-700",
 };
 
 export default function CallsPage() {
@@ -21,24 +21,23 @@ export default function CallsPage() {
   }, []);
 
   return (
-    <div className="space-y-4">
+    <div className="p-8 space-y-4">
       <h1 className="text-2xl font-semibold">Calls</h1>
-      {err && <p className="text-red-400 text-sm">{err}</p>}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-x-auto">
+      {err && <p className="text-red-600 text-sm">{err}</p>}
+      <div className="bg-white border border-zinc-200 rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-zinc-500 border-b border-zinc-800 text-left">
+            <tr className="text-zinc-500 border-b border-zinc-200 text-left">
               <th className="p-3">Date</th><th className="p-3">Call ID</th>
               <th className="p-3">Status</th><th className="p-3">Duration</th>
               <th className="p-3">Outcome</th><th className="p-3">Intent</th>
               <th className="p-3">KB?</th><th className="p-3">Esc</th>
-              <th className="p-3">Transcript</th><th className="p-3">KB answer</th>
-              <th className="p-3">Sources</th><th className="p-3">Summary</th>
+              <th className="p-3">Transcript</th><th className="p-3">Summary</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-b border-zinc-800/60 align-top hover:bg-zinc-900">
+              <tr key={r.id} className="border-b border-zinc-100 align-top hover:bg-zinc-50">
                 <td className="p-3 whitespace-nowrap">
                   {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
                 </td>
@@ -56,18 +55,14 @@ export default function CallsPage() {
                 <td className="p-3">{r.intent ?? "—"}</td>
                 <td className="p-3">{r.kb_answer_given ? "✅" : "—"}</td>
                 <td className="p-3">{r.escalated ? "🚨" : "—"}</td>
-                <td className="p-3 max-w-[180px] text-zinc-400" dir="rtl">
+                <td className="p-3 max-w-[200px] text-zinc-600" dir="rtl">
                   {(r.transcript ?? "").slice(0, 110)}…
                 </td>
-                <td className="p-3 max-w-[180px]" dir="rtl">{(r.kb_answer ?? "").slice(0, 120)}</td>
-                <td className="p-3 max-w-[140px] text-zinc-400" dir="rtl">
-                  {(Array.isArray(r.kb_sources) ? r.kb_sources : []).join("، ")}
-                </td>
-                <td className="p-3 max-w-[200px]" dir="rtl">{r.call_summary ?? "—"}</td>
+                <td className="p-3 max-w-[220px]" dir="rtl">{r.call_summary ?? "—"}</td>
               </tr>
             ))}
             {!rows.length && (
-              <tr><td colSpan={12} className="p-4 text-zinc-500">No calls visible to your role.</td></tr>
+              <tr><td colSpan={10} className="p-4 text-zinc-500">No calls visible to your role.</td></tr>
             )}
           </tbody>
         </table>

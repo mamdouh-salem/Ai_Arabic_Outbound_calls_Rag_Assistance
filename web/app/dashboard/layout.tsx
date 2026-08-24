@@ -28,9 +28,9 @@ const TABS = [
 ];
 
 const ROLE_STYLE: Record<string, string> = {
-  super_admin: "bg-purple-500/20 text-purple-300 border-purple-500/50",
-  admin: "bg-amber-500/20 text-amber-300 border-amber-500/50",
-  agent: "bg-green-500/20 text-green-300 border-green-500/50",
+  super_admin: "bg-purple-100 text-purple-700 border-purple-200",
+  admin: "bg-amber-100 text-amber-700 border-amber-200",
+  agent: "bg-green-100 text-green-700 border-green-200",
 };
 
 export default function DashboardLayout({
@@ -76,30 +76,52 @@ export default function DashboardLayout({
 
   return (
     <IdentityContext.Provider value={identity}>
-      <div className="min-h-screen bg-zinc-950 text-zinc-100">
-        {/* topbar */}
-        <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-zinc-800 bg-zinc-900 px-5 h-14">
-          <span className="font-semibold">🎙️ Outbound AI</span>
-          <nav className="flex flex-1 gap-1 overflow-x-auto">
+      <div className="min-h-screen flex bg-zinc-50">
+        {/* sidebar — Teammate B's original design */}
+        <nav className="w-56 shrink-0 bg-white border-r border-zinc-200 p-4 flex flex-col">
+          <h2 className="font-semibold text-lg mb-4 px-2 text-black">Outbound AI</h2>
+          <div className="flex flex-col gap-1 flex-1">
             {TABS.filter((t) => t.roles.includes(role)).map((t) => (
               <Link
                 key={t.href}
                 href={t.href}
-                className={`px-3 py-1.5 rounded-lg text-sm whitespace-nowrap ${
+                className={`px-2 py-2 rounded text-sm ${
                   pathname === t.href
-                    ? "bg-zinc-800 text-white"
-                    : "text-zinc-400 hover:text-zinc-100"
+                    ? "bg-zinc-100 text-black font-medium"
+                    : "text-zinc-700 hover:bg-zinc-100"
                 }`}
               >
                 {t.label}
               </Link>
             ))}
-          </nav>
-          <span className="text-sm text-zinc-400 hidden md:inline">
+          </div>
+
+          {/* super-admin workspace scope */}
+          {role === "super_admin" && (
+            <div className="mb-3 border-t border-zinc-200 pt-3">
+              <p className="text-[11px] text-zinc-500 mb-1 px-2">
+                Workspace scope (super admin)
+              </p>
+              <input
+                value={wsInput}
+                onChange={(e) => setWsInput(e.target.value)}
+                placeholder="empty = all"
+                className="w-full border border-zinc-300 rounded px-2 py-1 text-xs mb-1"
+              />
+              <button
+                onClick={applyWorkspace}
+                className="w-full bg-zinc-900 text-white rounded py-1 text-xs hover:bg-zinc-700"
+              >
+                Apply
+              </button>
+            </div>
+          )}
+
+          <div className="border-t border-zinc-200 pt-3 text-xs text-zinc-600 break-all px-2">
             {identity?.email}
-          </span>
+          </div>
           <span
-            className={`px-2.5 py-0.5 rounded-full text-xs border ${
+            className={`mt-2 mx-2 text-center text-[11px] border rounded-full px-2 py-0.5 ${
               ROLE_STYLE[role] ?? ""
             }`}
           >
@@ -107,36 +129,16 @@ export default function DashboardLayout({
           </span>
           <button
             onClick={handleLogout}
-            className="text-sm text-zinc-400 hover:text-white border border-zinc-700 rounded-lg px-3 py-1"
+            className="mt-2 mx-2 text-xs text-zinc-600 underline hover:text-black text-left"
           >
-            Logout
+            Log out
           </button>
-        </header>
+        </nav>
 
-        {/* super-admin workspace scope bar */}
-        {role === "super_admin" && (
-          <div className="flex items-center gap-3 px-5 py-2 bg-purple-950/40 border-b border-zinc-800 text-xs">
-            <span className="text-purple-300">
-              Workspace scope (super admin):
-            </span>
-            <input
-              value={wsInput}
-              onChange={(e) => setWsInput(e.target.value)}
-              placeholder="leave empty = all workspaces"
-              className="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 w-72"
-            />
-            <button
-              onClick={applyWorkspace}
-              className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1 hover:bg-zinc-700"
-            >
-              Apply
-            </button>
-          </div>
-        )}
-
-        <main className="max-w-6xl mx-auto p-6">
-          {ready ? children : <p className="text-zinc-500">Loading…</p>}
-        </main>
+        {/* content */}
+        <div className="flex-1 overflow-x-auto">
+          {ready ? children : <p className="p-8 text-zinc-500">Loading…</p>}
+        </div>
       </div>
     </IdentityContext.Provider>
   );

@@ -49,7 +49,6 @@ export default function AgentDeskPage() {
   }
 
   async function toggleMic() {
-    const btn = document.getElementById("mic-btn");
     if (mediaRef.current && mediaRef.current.state === "recording") {
       mediaRef.current.stop();
       return;
@@ -63,7 +62,6 @@ export default function AgentDeskPage() {
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         setRecording(false);
-        if (btn) { btn.textContent = "🎤 Ask by voice"; }
         const blob = new Blob(chunks.current, { type: mr.mimeType || "audio/webm" });
         const fd = new FormData();
         fd.append("file", blob, "question.webm");
@@ -76,7 +74,7 @@ export default function AgentDeskPage() {
           write(`\n\n🧑 [voice] ${res.question}\n\n🤖 Assistant:\n${res.answer}` +
             (res.citations?.length ? `\n\n📚 Citations:\n${res.citations.map((c: Citation) => `[${c.index}] ${c.source}`).join("\n")}` : ""));
           if (res.audio_url) {
-            setAudioUrl(res.audio_url);
+            setAudioUrl(`http://localhost:8000${res.audio_url}`);
             setTimeout(() => audioRef.current?.play().catch(() => {}), 100);
           }
         } catch (e: any) { write(`\n❌ ${e.message}`); }
@@ -84,34 +82,32 @@ export default function AgentDeskPage() {
       };
       mr.start();
       setRecording(true);
-      if (btn) { btn.textContent = "⏺ Recording… (click to send)"; }
     } catch { alert("Microphone permission denied"); }
   }
 
   return (
-    <div className="space-y-4">
+    <div className="p-8 space-y-4">
       <h1 className="text-2xl font-semibold">RAG Assistant</h1>
-      <p className="text-xs text-zinc-500">
+      <p className="text-sm text-zinc-600">
         Grounded answers from your workspace knowledge base, with citations.
       </p>
 
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
           <div ref={logRef}
-            className="text-xs bg-zinc-950 border border-zinc-800 rounded-lg p-3 overflow-auto whitespace-pre-wrap"
+            className="text-xs bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-3 overflow-auto whitespace-pre-wrap"
             style={{ minHeight: 320, maxHeight: 480 }}>
             {log}
           </div>
           {audioUrl && (
-            <audio ref={audioRef} src={audioUrl} controls
-              className="w-full mt-3" />
+            <audio ref={audioRef} src={audioUrl} controls className="w-full mt-3" />
           )}
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+        <div className="bg-white border border-zinc-200 rounded-xl p-4 space-y-3">
           <div>
             <label className="text-xs text-zinc-500">Persona</label>
             <select value={persona} onChange={(e) => setPersona(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm">
+              className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm">
               <option value="default">default — professional MSA</option>
               <option value="egyptian_friendly">Egyptian friendly 🇪🇬</option>
               <option value="formal">formal — فصحى رسمية</option>
@@ -123,7 +119,7 @@ export default function AgentDeskPage() {
           <div>
             <label className="text-xs text-zinc-500">Answer language</label>
             <select value={language} onChange={(e) => setLanguage(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm">
+              className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm">
               <option value="arabic">العربية</option><option value="english">English</option>
               <option value="spanish">Español</option><option value="german">Deutsch</option>
               <option value="french">Français</option>
@@ -132,23 +128,23 @@ export default function AgentDeskPage() {
           <div>
             <label className="text-xs text-zinc-500">Category filter (optional)</label>
             <select value={category} onChange={(e) => setCategory(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm">
+              className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm">
               <option value="">all categories</option>
               <option>routers</option><option>billing</option><option>accounts</option>
             </select>
           </div>
           <textarea value={question} onChange={(e) => setQuestion(e.target.value)} rows={3} dir="rtl"
             placeholder="اكتب سؤالك هنا…"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm" />
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
           <div className="flex gap-2">
             <button onClick={handleAsk}
-              className="flex-1 bg-sky-600 hover:bg-sky-500 text-white px-4 py-2 rounded-lg text-sm">
+              className="flex-1 bg-black text-white px-4 py-2 rounded-lg text-sm hover:bg-zinc-800">
               Ask 🤖
             </button>
-            <button id="mic-btn" onClick={toggleMic}
+            <button onClick={toggleMic}
               className={`flex-1 px-4 py-2 rounded-lg text-sm border ${
                 recording ? "bg-red-600 border-red-500 text-white animate-pulse"
-                          : "bg-zinc-900 border-zinc-700 hover:bg-zinc-800"}`}>
+                          : "bg-white border-zinc-300 hover:bg-zinc-100"}`}>
               {recording ? "⏺ Recording… (click to send)" : "🎤 Ask by voice"}
             </button>
           </div>

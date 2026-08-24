@@ -20,11 +20,7 @@ export default function TicketsPage() {
   const [err, setErr] = useState("");
 
   async function load() {
-    try {
-      setRows((await getTickets()) as Ticket[]);
-    } catch (e: any) {
-      setErr(e.message);
-    }
+    try { setRows((await getTickets()) as Ticket[]); } catch (e: any) { setErr(e.message); }
   }
   useEffect(() => { if (me) load(); }, [me]);
 
@@ -39,16 +35,16 @@ export default function TicketsPage() {
   const canCall = me?.role === "admin" || me?.role === "super_admin";
 
   return (
-    <div className="space-y-4">
+    <div className="p-8 space-y-4">
       <h1 className="text-2xl font-semibold">Tickets</h1>
-      <p className="text-xs text-zinc-500">
+      <p className="text-sm text-zinc-600">
         agent → only tickets assigned to you · admin → whole workspace · super admin → everything
       </p>
-      {err && <p className="text-red-400 text-sm">{err}</p>}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-x-auto">
+      {err && <p className="text-red-600 text-sm">{err}</p>}
+      <div className="bg-white border border-zinc-200 rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-zinc-500 border-b border-zinc-800 text-left">
+            <tr className="text-zinc-500 border-b border-zinc-200 text-left">
               <th className="p-3">ID</th><th className="p-3">Title</th>
               <th className="p-3">Customer</th><th className="p-3">Phone</th>
               <th className="p-3">Status</th><th className="p-3">Category</th>
@@ -57,12 +53,12 @@ export default function TicketsPage() {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-b border-zinc-800/60 hover:bg-zinc-900">
+              <tr key={r.id} className="border-b border-zinc-100 hover:bg-zinc-50">
                 <td className="p-3 font-mono text-xs">{r.id.slice(0, 8)}</td>
                 <td className="p-3" dir="rtl">{r.title}</td>
                 <td className="p-3" dir="rtl">{r.customer_name ?? "—"}</td>
                 <td className="p-3 font-mono text-xs" dir="ltr">{r.customer_phone ??
-                  <span className="text-red-400">no phone ⚠️</span>}</td>
+                  <span className="text-red-600">no phone ⚠️</span>}</td>
                 <td className="p-3">{r.status}</td>
                 <td className="p-3">{r.kb_category ?? "—"}</td>
                 <td className="p-3 text-zinc-500">{r.assigned_to ? r.assigned_to.slice(0, 8) : "unassigned"}</td>
@@ -70,11 +66,11 @@ export default function TicketsPage() {
                   <td className="p-3">
                     {r.customer_phone ? (
                       <button onClick={() => call(r.id)}
-                        className="bg-sky-600 hover:bg-sky-500 text-white text-xs px-3 py-1.5 rounded-lg">
+                        className="bg-black text-white text-xs px-3 py-1.5 rounded-lg hover:bg-zinc-700">
                         📞 Call
                       </button>
                     ) : (
-                      <button disabled className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-600 cursor-not-allowed">
+                      <button disabled className="text-xs px-3 py-1.5 rounded-lg bg-zinc-100 text-zinc-400 cursor-not-allowed">
                         📞
                       </button>
                     )}
