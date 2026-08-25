@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { chat, chatVoice } from "../../lib/console";
+import { useIdentity } from "../layout";
+import { chat, chatVoice, uploadKb } from "../../lib/console";
 
 type Citation = { index: number; source: string; score: number; snippet: string };
 
 export default function AgentDeskPage() {
+  const me = useIdentity();
+  const isAdminPlus = me?.role === "admin" || me?.role === "super_admin";
   const [log, setLog] = useState("Ask a question about the knowledge base…");
   const [question, setQuestion] = useState("");
   const [persona, setPersona] = useState("default");
@@ -17,6 +20,31 @@ export default function AgentDeskPage() {
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // upload-to-KB state (admins+)
+  const [upCategory, setUpCategory] = useState("");
+  const [upTitle, setUpTitle] = useState("");
+  const [upFile, setUpFile] = useState<File | null>(null);
+  const [upBusy, setUpBusy] = useState(false);
+  const [upMsg, setUpMsg] = useState("");
+
+  async function quickUpload() {
+    if (!upCategory.trim()) return setUpMsg("Category is required");
+    if (!upFile) return setUpMsg("Choose a file first");
+    const fd = new FormData();
+    fd.append("category", upCategory.trim());
+    if (upTitle.trim()) fd.append("title", upTitle.trim());
+    fd.append("file", upFile);
+    setUpBusy(true);
+    try {
+      const res: any = await uploadKb(fd);
+      setUpMsg(`✅ Ingested "${res.source}" — ${res.chunks} chunk(s). Ask away!`);
+      setUpFile(null); setUpTitle("");
+      const input = document.getElementById("kb-file-input") as HTMLInputElement | null;
+      if (input) input.value = "";
+    } catch (e: any) { setUpMsg("❌ " + e.message); }
+    finally { setUpBusy(false); }
+  }
 
   function scroll() {
     setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 50);
@@ -86,11 +114,44 @@ export default function AgentDeskPage() {
   }
 
   return (
-    <div className="p-8 space-y-4">
+    <div className="space-y-4">
       <h1 className="text-2xl font-semibold">RAG Assistant</h1>
-      <p className="text-sm text-zinc-600">
+      <p className="text-xs text-zinc-500">
         Grounded answers from your workspace knowledge base, with citations.
       </p>
+
+      {isAdminPlus && (
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 space-y-3">
+          <h3 className="font-semibold text-sm">
+            📎 Upload to knowledge base{" "}
+            <span className="text-xs text-zinc-500 font-normal">pdf · docx · txt · md · csv</span>
+          </h3>
+          <div className="grid md:grid-cols-2 gap-3 items-end">
+            <div>
+              <label className="text-xs text-zinc-500">Category *</label>
+              <input value={upCategory} onChange={(e) => setUpCategory(e.target.value)}
+                placeholder="routers / billing / accounts …"
+                className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
+              <label className="text-xs text-zinc-500 block mt-2">File</label>
+              <input id="kb-file-input" type="file"
+                accept=".txt,.md,.markdown,.pdf,.docx,.csv,.json"
+                onChange={(e) => setUpFile(e.target.files?.[0] ?? null)}
+                className="w-full text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500">Title (optional)</label>
+              <input value={upTitle} onChange={(e) => setUpTitle(e.target.value)}
+                placeholder="SOP_Routers_06"
+                className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
+              <button onClick={quickUpload} disabled={upBusy}
+                className="mt-2 w-full bg-black text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">
+                {upBusy ? "Ingesting…" : "⬆ Upload & Ingest"}
+              </button>
+            </div>
+          </div>
+          {upMsg && <p className="text-xs text-zinc-700">{upMsg}</p>}
+        </div>
+      )}
 
       <div className="grid md:grid-cols-2 gap-4">
         <div className="bg-white border border-zinc-200 rounded-xl p-4">
