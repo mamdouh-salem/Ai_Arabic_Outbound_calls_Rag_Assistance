@@ -450,7 +450,9 @@ async def event(request: Request):
     conv = b.get("conversation_uuid")
     ctx = _adopt_conversation(conv)
     log.info("vonage_event", status=status, known=ctx is not None,
-             **({"reason": b["reason"]} if b.get("reason") else {}))
+             **({"reason": b["reason"]} if b.get("reason") else {}),
+             **({"payload": b} if status in ("failed", "busy", "rejected",
+                                             "timeout", "completed") else {}))
 
     if ctx is not None and status:
         mapping = {"started": "dialing", "ringing": "ringing", "answered": "answered"}
@@ -533,6 +535,8 @@ def _adopt_conversation(conv: str):
     If we see an unknown conv while exactly ONE unsaved live call exists,
     adopt it: re-key that call's state under the new conversation_uuid.
     (Single-active-call assumption holds for local/dev testing.)"""
+    if not conv:
+        return CALL_STATE.get(conv)  # nothing to adopt under a missing uuid
     ctx = CALL_STATE.get(conv)
     if ctx is not None:
         return ctx
@@ -589,9 +593,6 @@ async def recording(request: Request):
     ctx.setdefault("turns", []).append(text)
     cat, title = ctx.get("category", "billing"), ctx.get("ticket_title", "")
     flow_stage = ctx.get("stage", 1)
-    # RAG retrieval scope for this call: ticket's workspace + shared main KB
-    call_ws = ctx.get("workspace_id") or DEFAULT_WORKSPACE_ID
-    scope_ids = [call_ws] if call_ws == DEFAULT_WORKSPACE_ID else [call_ws, DEFAULT_WORKSPACE_ID]
 
     try:
         return await _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage)
@@ -619,6 +620,10 @@ async def recording(request: Request):
 
 
 async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
+    # RAG retrieval scope for this call: ticket's workspace + shared main KB
+    call_ws = ctx.get("workspace_id") or DEFAULT_WORKSPACE_ID
+    scope_ids = ([call_ws] if call_ws == DEFAULT_WORKSPACE_ID
+                 else [call_ws, DEFAULT_WORKSPACE_ID])
 
     async def _close(outcome_state: dict):
         intent = await intent_classifier.classify(tr)

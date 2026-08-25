@@ -22,19 +22,20 @@ from outbound_ai.rag.generation import generate_answer
 router = APIRouter(prefix="/kb", tags=["kb"])
 
 
+DEFAULT_WORKSPACE_ID = "aaaaaaaa-0000-0000-0000-000000000001"
+
+
 def _require_workspace(ctx: AuthContext) -> str:
     """Workspace scoping for KB operations.
 
-    admins act inside their own workspace; super_admins must supply
-    X-Workspace-Id when operating platform-wide.
+    admins act inside their own workspace; a super admin WITHOUT an explicit
+    X-Workspace-Id scope defaults to the shared MAIN workspace (the platform
+    knowledge base) — that's where platform-wide docs belong.
     """
     try:
         return str(ctx.assert_workspace())
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="super_admin must send an X-Workspace-Id header for KB operations.",
-        ) from exc
+    except ValueError:
+        return DEFAULT_WORKSPACE_ID
 
 
 @router.post("/documents", status_code=status.HTTP_201_CREATED)
@@ -143,9 +144,6 @@ class ChatRequest(BaseModel):
     persona: str = "default"
     # arabic (default) | english | spanish | german | french
     language: str | None = None
-
-
-DEFAULT_WORKSPACE_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 
 
 def _chat_scope(ctx: AuthContext) -> tuple[list[str] | None, str]:
