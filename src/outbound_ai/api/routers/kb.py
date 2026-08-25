@@ -145,11 +145,27 @@ class ChatRequest(BaseModel):
     language: str | None = None
 
 
-def _chat_scope(ctx: AuthContext) -> str | None:
+DEFAULT_WORKSPACE_ID = "aaaaaaaa-0000-0000-0000-000000000001"
+
+
+def _chat_scope(ctx: AuthContext) -> tuple[list[str] | None, str]:
+    """Workspace scoping for RAG retrieval.
+
+    Returns (workspace_ids, label):
+      agent       -> [own workspace]
+      admin       -> [own workspace + the shared main KB]
+      super_admin -> None (everything)
+    """
     try:
-        return str(ctx.assert_workspace())
+        own = str(ctx.assert_workspace())
     except ValueError:
-        return None  # platform-wide super_admin
+        return None, "ALL"
+    if ctx.role == "admin":
+        ids = [own]
+        if own != DEFAULT_WORKSPACE_ID:
+            ids.append(DEFAULT_WORKSPACE_ID)
+        return ids, f"{own} + main KB"
+    return [own], own
 
 
 @router.post("/chat")
@@ -160,10 +176,10 @@ async def rag_chat(body: ChatRequest, ctx: AuthContext = Depends(get_current_use
     persona selects the response style (default / egyptian_friendly / formal /
     concise / empathetic / technical); language forces the answer language
     (arabic / english / spanish / german / french)."""
-    scope = _chat_scope(ctx)
+    scope_ids, scope_label = _chat_scope(ctx)
 
     result = await asyncio.to_thread(
-        generate_answer, body.question, body.category, scope, "qa", "",
+        generate_answer, body.question, body.category, scope_ids, "qa", "",
         body.persona, body.language,
     )
     return {
@@ -173,7 +189,7 @@ async def rag_chat(body: ChatRequest, ctx: AuthContext = Depends(get_current_use
         "chunks_used": result["chunks_used"],
         "persona": body.persona,
         "language": body.language or "arabic",
-        "workspace_scope": scope or "ALL",
+        "workspace_scope": scope_label,
     }
 
 
@@ -197,9 +213,9 @@ async def rag_chat_voice(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Could not understand the recording — try again.")
 
-    scope = _chat_scope(ctx)
+    scope_ids, scope_label = _chat_scope(ctx)
     result = await asyncio.to_thread(
-        generate_answer, question, category, scope, "qa", "", persona, language
+        generate_answer, question, category, scope_ids, "qa", "", persona, language
     )
 
     audio_path = await synthesize_to_cache(result["answer"], prefix="chat")
@@ -210,5 +226,6 @@ async def rag_chat_voice(
         "sources": result["sources"],
         "persona": persona,
         "language": language or "arabic",
+        "workspace_scope": scope_label,
         "audio_url": f"/audio/{audio_path.name}" if audio_path else None,
     }

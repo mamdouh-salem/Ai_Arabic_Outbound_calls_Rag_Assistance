@@ -122,11 +122,14 @@ async def data_query(body: DataQueryRequest, ctx: AdminOrAbove) -> dict:
     English) — the LLM writes a validated read-only SELECT, we execute it
     with a timeout and return the rows + the generated SQL.
 
-    admin/super_admin only; agents cannot query business data."""
+    Tenant scoping: admins are FORCED into their own workspace (the generated
+    SQL must filter by their workspace_id — validated post-generation).
+    super admins are unrestricted (platform-wide role)."""
     from outbound_ai.rag.sql_rag import run_sql_query
 
+    workspace_id = str(ctx.workspace_id) if ctx.workspace_id else None
     try:
-        return await asyncio.to_thread(run_sql_query, body.question)
+        return await asyncio.to_thread(run_sql_query, body.question, workspace_id)
     except ValueError as exc:
         from fastapi import HTTPException, status
 

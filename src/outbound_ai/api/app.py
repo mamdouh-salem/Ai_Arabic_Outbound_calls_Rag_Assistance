@@ -589,6 +589,9 @@ async def recording(request: Request):
     ctx.setdefault("turns", []).append(text)
     cat, title = ctx.get("category", "billing"), ctx.get("ticket_title", "")
     flow_stage = ctx.get("stage", 1)
+    # RAG retrieval scope for this call: ticket's workspace + shared main KB
+    call_ws = ctx.get("workspace_id") or DEFAULT_WORKSPACE_ID
+    scope_ids = [call_ws] if call_ws == DEFAULT_WORKSPACE_ID else [call_ws, DEFAULT_WORKSPACE_ID]
 
     try:
         return await _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage)
@@ -652,10 +655,11 @@ async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
 
     # ---- STAGE 2: explanation given → NOW run similarity search + KB ------
     if flow_stage == 2:
-        # similarity search uses ticket title + the customer's own explanation
+        # similarity search uses ticket title + the customer's own explanation,
+        # scoped to the ticket's workspace (+ the shared main KB)
         query = f"{title} {text}".strip()
         ans, chunks, ok = await kb_assist.retrieve(
-            query, cat, style="call",
+            query, cat, workspace_ids=scope_ids, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         ctx.update({"kb_answer": ans, "sources": [c.get("source") for c in chunks],
                     "kb_answer_given": ok})
@@ -684,9 +688,9 @@ async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
             ctx["stage"] = 4
             await _adapter.update_call_ncco(call_id, ncco)
             return {}
-        # not done yet / more detail → guide again from the KB
+        # not done yet / more detail → guide again from the KB (same scope)
         ans, chunks, ok = await kb_assist.retrieve(
-            f"{title} {text}", cat, style="call",
+            f"{title} {text}", cat, workspace_ids=scope_ids, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         if not ok or _kb_found_no_solution(ans):
             return await _transfer_to_human(ctx, call_id, tr, {
