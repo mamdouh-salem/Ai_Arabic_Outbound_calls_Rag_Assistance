@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
+from outbound_ai.auth.dependencies import AdminOnly, CurrentUser, get_current_user
 from outbound_ai.auth.models import AppRole, AuthContext
 from outbound_ai.db.service_client import get_service_client
 
@@ -117,7 +117,7 @@ class DataQueryRequest(BaseModel):
 
 
 @router.post("/data/query")
-async def data_query(body: DataQueryRequest, ctx: AdminOrAbove) -> dict:
+async def data_query(body: DataQueryRequest, ctx: AdminOnly) -> dict:
     """Ask questions about the BUSINESS DATA in plain language (Arabic or
     English) — the LLM writes a validated read-only SELECT, we execute it
     with a timeout and return the rows + the generated SQL.

@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
 from outbound_ai.auth.dependencies import (
-    AdminOrAbove,
     SuperAdmin,
     require_super_admin,
 )
@@ -50,7 +49,7 @@ class CreatedUserResponse(BaseModel):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=CreatedUserResponse)
-async def create_user(body: CreateUserRequest, ctx: AdminOrAbove) -> dict:
+async def create_user(body: CreateUserRequest, ctx: SuperAdmin) -> dict:
     """Create a Supabase auth account + profile + (optional) workspace membership.
 
     Authority rules:
@@ -144,7 +143,7 @@ async def create_user(body: CreateUserRequest, ctx: AdminOrAbove) -> dict:
 
 
 @router.get("")
-async def list_users(ctx: AdminOrAbove) -> list[dict]:
+async def list_users(ctx: SuperAdmin) -> list[dict]:
     """Users visible to the caller per the hierarchy:
     super_admin -> all users (optionally ?workspace_id=...); admin -> own workspace."""
     sb = get_service_client()

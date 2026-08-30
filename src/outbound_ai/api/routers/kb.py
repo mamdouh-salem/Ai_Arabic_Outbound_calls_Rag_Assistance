@@ -12,8 +12,7 @@ import asyncio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
-from outbound_ai.auth.dependencies import AdminOrAbove
-from outbound_ai.auth.dependencies import get_current_user
+from outbound_ai.auth.dependencies import AdminOnly, AdminOrAgent, get_current_user
 from outbound_ai.auth.models import AuthContext
 from outbound_ai.db.service_client import get_service_client
 from outbound_ai.rag.ingestion import extract_text, ingest_document
@@ -40,7 +39,7 @@ def _require_workspace(ctx: AuthContext) -> str:
 
 @router.post("/documents", status_code=status.HTTP_201_CREATED)
 async def upload_document(
-    ctx: AdminOrAbove,
+    ctx: AdminOnly,
     category: str = Form(...),
     file: UploadFile | None = File(default=None),
     title: str | None = Form(default=None),
@@ -88,7 +87,7 @@ async def upload_document(
 
 
 @router.get("/documents")
-async def list_documents(ctx: AdminOrAbove) -> list[dict]:
+async def list_documents(ctx: AdminOnly) -> list[dict]:
     """List distinct documents (by source name) with chunk counts.
 
     super_admins without an X-Workspace-Id header see ALL workspaces' docs;
@@ -115,7 +114,7 @@ async def list_documents(ctx: AdminOrAbove) -> list[dict]:
 
 
 @router.delete("/documents/{source_name}")
-async def delete_document(source_name: str, ctx: AdminOrAbove) -> dict:
+async def delete_document(source_name: str, ctx: AdminOnly) -> dict:
     workspace_id = _require_workspace(ctx)
     sb = get_service_client()
     res = (
@@ -167,7 +166,7 @@ def _chat_scope(ctx: AuthContext) -> tuple[list[str] | None, str]:
 
 
 @router.post("/chat")
-async def rag_chat(body: ChatRequest, ctx: AuthContext = Depends(get_current_user)) -> dict:
+async def rag_chat(body: ChatRequest, ctx: AdminOrAgent) -> dict:
     """Ask the knowledge base a question; get a grounded answer with citations.
     Agents use this as their live-call co-pilot.
 
@@ -193,7 +192,7 @@ async def rag_chat(body: ChatRequest, ctx: AuthContext = Depends(get_current_use
 
 @router.post("/chat/voice")
 async def rag_chat_voice(
-    ctx: AuthContext = Depends(get_current_user),
+    ctx: AdminOrAgent,
     file: UploadFile = File(...),
     category: str | None = Form(default=None),
     persona: str = Form(default="default"),

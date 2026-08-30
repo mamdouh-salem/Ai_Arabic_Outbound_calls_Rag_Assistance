@@ -21,7 +21,7 @@ from outbound_ai.agents import intent_classifier, kb_assist, reporting, routing
 from outbound_ai.api.routers import admin_users, data, kb as kb_docs, workspaces
 from outbound_ai.api.routers.data import visible_ticket_filters
 from outbound_ai.auth import AuthContext, get_current_user
-from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
+from outbound_ai.auth.dependencies import AdminOrAgent, CurrentUser
 from outbound_ai.config.settings import get_settings
 from outbound_ai.telephony.vonage_adapter import VonageTelephonyAdapter
 
@@ -388,7 +388,7 @@ async def _place_ticket_call(
 
 
 @app.post("/start-call")
-async def start_call(request: Request, ctx: AdminOrAbove):
+async def start_call(request: Request, ctx: AdminOrAgent):
     """Place a live outbound call. admin/super_admin only — dialing costs
     money and is a campaign-level action."""
     b = await request.json()
@@ -404,7 +404,7 @@ async def start_call(request: Request, ctx: AdminOrAbove):
 
 
 @app.post("/tickets/{ticket_id}/call")
-async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAbove):
+async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAgent):
     """One-click dial: pulls the ticket + its customer's phone automatically.
     Visibility rules apply (agents cannot reach this route; admins only their
     workspace; super admins any workspace via X-Workspace-Id)."""
