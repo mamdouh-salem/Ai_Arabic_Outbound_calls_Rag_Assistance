@@ -235,6 +235,18 @@ curl http://localhost:8000/health                       # unauthenticated → {"
 curl http://localhost:8000/health/auth -H "Authorization: Bearer <jwt>"   # → identity JSON
 ```
 
+### Role-based access summary (implemented)
+
+| Endpoint | Admin | Agent | Super Admin |
+|---|---|---|---|
+| /start-call, /tickets/{id}/call | YES | YES | NO |
+| /kb/documents (upload/list/delete) | YES | NO | NO |
+| /kb/chat, /kb/chat/voice | YES | YES | NO |
+| /data/query (NL to SQL) | YES | NO | NO |
+| /admin/workspaces | NO | NO | YES |
+| /admin/users | NO | NO | YES |
+| /health/auth | YES | YES | YES |
+
 ---
 
 ## Phase 2 requirements
