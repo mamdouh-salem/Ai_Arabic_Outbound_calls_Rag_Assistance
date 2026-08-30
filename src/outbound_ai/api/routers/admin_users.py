@@ -15,7 +15,10 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
-from outbound_ai.auth.dependencies import AdminOrAbove, require_super_admin
+from outbound_ai.auth.dependencies import (
+    SuperAdmin,
+    require_super_admin,
+)
 from outbound_ai.auth.models import AppRole, AuthContext
 from outbound_ai.db.service_client import get_service_client
 
@@ -46,7 +49,7 @@ class CreatedUserResponse(BaseModel):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=CreatedUserResponse)
-async def create_user(body: CreateUserRequest, ctx: AdminOrAbove) -> dict:
+async def create_user(body: CreateUserRequest, ctx: SuperAdmin) -> dict:
     """Create a Supabase auth account + profile + (optional) workspace membership.
 
     Authority rules:
@@ -140,7 +143,7 @@ async def create_user(body: CreateUserRequest, ctx: AdminOrAbove) -> dict:
 
 
 @router.get("")
-async def list_users(ctx: AdminOrAbove) -> list[dict]:
+async def list_users(ctx: SuperAdmin) -> list[dict]:
     """Users visible to the caller per the hierarchy:
     super_admin -> all users (optionally ?workspace_id=...); admin -> own workspace."""
     sb = get_service_client()
@@ -178,7 +181,7 @@ async def list_users(ctx: AdminOrAbove) -> list[dict]:
 async def change_platform_role(
     user_id: uuid.UUID,
     new_role: Literal["agent", "admin", "super_admin"],
-    ctx: Annotated[AuthContext, Depends(require_super_admin)],
+    ctx: SuperAdmin,
 ) -> dict:
     """Promote/demote a user's PLATFORM role. super_admin only."""
     sb = get_service_client()
@@ -193,3 +196,35 @@ async def change_platform_role(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     return {"status": "updated", **rows[0]}
+
+
+class ResetPasswordRequest(BaseModel):
+    # Omit to auto-generate a strong password (returned ONCE in the response).
+    new_password: str | None = Field(default=None, min_length=8)
+
+
+@router.patch("/{user_id}/password")
+async def reset_user_password(
+    user_id: uuid.UUID,
+    body: ResetPasswordRequest,
+    ctx: SuperAdmin,
+) -> dict:
+    """Set a NEW password for any user — super_admin only.
+
+    Passwords are stored one-way (bcrypt) inside Supabase's auth schema and
+    can never be read back — resetting is the only recovery path. The new
+    password is returned ONCE when auto-generated."""
+    sb = get_service_client()
+    new_password = body.new_password or secrets.token_urlsafe(12)
+    try:
+        sb.auth.admin.update_user_by_id(str(user_id), {"password": new_password})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Password update refused: {exc}",
+        ) from exc
+    return {
+        "status": "password_updated",
+        "user_id": str(user_id),
+        "generated_password": new_password if body.new_password is None else None,
+    }

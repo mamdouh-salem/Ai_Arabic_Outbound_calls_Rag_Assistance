@@ -1,72 +1,215 @@
 "use client";
 
-import { useState } from "react";
-import { apiFetch } from "../../apiClient";
+import { useEffect, useRef, useState } from "react";
+import { useIdentity } from "../layout";
+import { chat, chatVoice, uploadKb } from "../../lib/console";
 
-type Message = { role: "user" | "assistant"; content: string };
+type Citation = { index: number; source: string; score: number; snippet: string };
 
 export default function AgentDeskPage() {
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const me = useIdentity();
+  const isAdminPlus = me?.role === "admin" || me?.role === "super_admin";
+  const [log, setLog] = useState("Ask a question about the knowledge base…");
+  const [question, setQuestion] = useState("");
+  const [persona, setPersona] = useState("default");
+  const [language, setLanguage] = useState("arabic");
+  const [category, setCategory] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const mediaRef = useRef<MediaRecorder | null>(null);
+  const chunks = useRef<Blob[]>([]);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
-  async function handleSend() {
-    if (!input.trim()) return;
-    const question = input;
-    setMessages((prev) => [...prev, { role: "user", content: question }]);
-    setInput("");
-    setLoading(true);
-    setError("");
+  // upload-to-KB state (admins+)
+  const [upCategory, setUpCategory] = useState("");
+  const [upTitle, setUpTitle] = useState("");
+  const [upFile, setUpFile] = useState<File | null>(null);
+  const [upBusy, setUpBusy] = useState(false);
+  const [upMsg, setUpMsg] = useState("");
+
+  async function quickUpload() {
+    if (!upCategory.trim()) return setUpMsg("Category is required");
+    if (!upFile) return setUpMsg("Choose a file first");
+    const fd = new FormData();
+    fd.append("category", upCategory.trim());
+    if (upTitle.trim()) fd.append("title", upTitle.trim());
+    fd.append("file", upFile);
+    setUpBusy(true);
     try {
-      const data = await apiFetch("/kb/chat", {
-        method: "POST",
-        body: JSON.stringify({ question }),
+      const res: any = await uploadKb(fd);
+      setUpMsg(`✅ Ingested "${res.source}" — ${res.chunks} chunk(s). Ask away!`);
+      setUpFile(null); setUpTitle("");
+      const input = document.getElementById("kb-file-input") as HTMLInputElement | null;
+      if (input) input.value = "";
+    } catch (e: any) { setUpMsg("❌ " + e.message); }
+    finally { setUpBusy(false); }
+  }
+
+  function scroll() {
+    setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 50);
+  }
+  function write(s: string) { setLog((p) => p + s); scroll(); }
+
+  async function ask(q: string, cat: string, per: string, lang: string) {
+    write(`\n\n🧑 You: ${q}\n⏳ thinking…`);
+    try {
+      const res: any = await chat({
+        question: q, ...(cat ? { category: cat } : {}), persona: per,
+        ...(lang && lang !== "arabic" ? { language: lang } : {}),
       });
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.answer ?? JSON.stringify(data) },
-      ]);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+      const cites = (res.citations ?? [])
+        .map((c: Citation) => `[${c.index}] ${c.source} (${c.score})`).join("\n");
+      write(`\n\n🤖 Assistant [${res.persona}${res.language !== "arabic" ? " · " + res.language : ""}]:\n${res.answer}` +
+        (res.citations?.length ? `\n\n📚 Citations:\n${cites}` : "\n\n(no KB sources matched)") +
+        `\n— scope: ${res.workspace_scope} · chunks: ${res.chunks_used}`);
+    } catch (e: any) {
+      write(`\n❌ ${e.message}`);
     }
+    scroll();
+  }
+
+  function handleAsk() {
+    const q = question.trim();
+    if (!q) return;
+    setQuestion("");
+    ask(q, category, persona, language);
+  }
+
+  async function toggleMic() {
+    if (mediaRef.current && mediaRef.current.state === "recording") {
+      mediaRef.current.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks.current = [];
+      const mr = new MediaRecorder(stream);
+      mediaRef.current = mr;
+      mr.ondataavailable = (e) => chunks.current.push(e.data);
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        const blob = new Blob(chunks.current, { type: mr.mimeType || "audio/webm" });
+        const fd = new FormData();
+        fd.append("file", blob, "question.webm");
+        if (category) fd.append("category", category);
+        fd.append("persona", persona);
+        if (language !== "arabic") fd.append("language", language);
+        write(`\n\n🧑 [voice] ⏳ transcribing + thinking…`);
+        try {
+          const res: any = await chatVoice(fd);
+          write(`\n\n🧑 [voice] ${res.question}\n\n🤖 Assistant:\n${res.answer}` +
+            (res.citations?.length ? `\n\n📚 Citations:\n${res.citations.map((c: Citation) => `[${c.index}] ${c.source}`).join("\n")}` : ""));
+          if (res.audio_url) {
+            setAudioUrl(`http://localhost:8000${res.audio_url}`);
+            setTimeout(() => audioRef.current?.play().catch(() => {}), 100);
+          }
+        } catch (e: any) { write(`\n❌ ${e.message}`); }
+        scroll();
+      };
+      mr.start();
+      setRecording(true);
+    } catch { alert("Microphone permission denied"); }
   }
 
   return (
-    <div className="p-8 flex flex-col h-screen">
-      <h1 className="text-2xl font-semibold mb-6">Agent Desk</h1>
-      <div className="flex-1 bg-white dark:bg-zinc-900 rounded-lg shadow p-4 mb-4 overflow-y-auto flex flex-col gap-3">
-        {messages.length === 0 && (
-          <p className="text-zinc-400 text-sm">Ask the knowledge base a question...</p>
-        )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`max-w-[80%] p-3 rounded-lg text-sm ${
-              m.role === "user"
-                ? "self-end bg-black text-white"
-                : "self-start bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-            }`}
-          >
-            {m.content}
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold">RAG Assistant</h1>
+      <p className="text-xs text-zinc-500">
+        Grounded answers from your workspace knowledge base, with citations.
+      </p>
+
+      {isAdminPlus && (
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 space-y-3">
+          <h3 className="font-semibold text-sm">
+            📎 Upload to knowledge base{" "}
+            <span className="text-xs text-zinc-500 font-normal">pdf · docx · txt · md · csv</span>
+          </h3>
+          <div className="grid md:grid-cols-2 gap-3 items-end">
+            <div>
+              <label className="text-xs text-zinc-500">Category *</label>
+              <input value={upCategory} onChange={(e) => setUpCategory(e.target.value)}
+                placeholder="routers / billing / accounts …"
+                className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
+              <label className="text-xs text-zinc-500 block mt-2">File</label>
+              <input id="kb-file-input" type="file"
+                accept=".txt,.md,.markdown,.pdf,.docx,.csv,.json"
+                onChange={(e) => setUpFile(e.target.files?.[0] ?? null)}
+                className="w-full text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500">Title (optional)</label>
+              <input value={upTitle} onChange={(e) => setUpTitle(e.target.value)}
+                placeholder="SOP_Routers_06"
+                className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
+              <button onClick={quickUpload} disabled={upBusy}
+                className="mt-2 w-full bg-black text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">
+                {upBusy ? "Ingesting…" : "⬆ Upload & Ingest"}
+              </button>
+            </div>
           </div>
-        ))}
-        {loading && <p className="text-zinc-400 text-sm">Thinking...</p>}
-        {error && <p className="text-red-600 text-sm">{error}</p>}
-      </div>
-      <div className="flex gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder="Type a question..."
-          className="flex-1 border rounded px-3 py-2"
-        />
-        <button onClick={handleSend} className="bg-black text-white rounded px-4 py-2">
-          Send
-        </button>
+          {upMsg && <p className="text-xs text-zinc-700">{upMsg}</p>}
+        </div>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
+          <div ref={logRef}
+            className="text-xs bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-3 overflow-auto whitespace-pre-wrap"
+            style={{ minHeight: 320, maxHeight: 480 }}>
+            {log}
+          </div>
+          {audioUrl && (
+            <audio ref={audioRef} src={audioUrl} controls className="w-full mt-3" />
+          )}
+        </div>
+        <div className="bg-white border border-zinc-200 rounded-xl p-4 space-y-3">
+          <div>
+            <label className="text-xs text-zinc-500">Persona</label>
+            <select value={persona} onChange={(e) => setPersona(e.target.value)}
+              className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm">
+              <option value="default">default — professional MSA</option>
+              <option value="egyptian_friendly">Egyptian friendly 🇪🇬</option>
+              <option value="formal">formal — فصحى رسمية</option>
+              <option value="concise">concise — مختصر جدًا</option>
+              <option value="empathetic">empathetic — متعاطف</option>
+              <option value="technical">technical — دقة تقنية</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-500">Answer language</label>
+            <select value={language} onChange={(e) => setLanguage(e.target.value)}
+              className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm">
+              <option value="arabic">العربية</option><option value="english">English</option>
+              <option value="spanish">Español</option><option value="german">Deutsch</option>
+              <option value="french">Français</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-500">Category filter (optional)</label>
+            <select value={category} onChange={(e) => setCategory(e.target.value)}
+              className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm">
+              <option value="">all categories</option>
+              <option>routers</option><option>billing</option><option>accounts</option>
+            </select>
+          </div>
+          <textarea value={question} onChange={(e) => setQuestion(e.target.value)} rows={3} dir="rtl"
+            placeholder="اكتب سؤالك هنا…"
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm" />
+          <div className="flex gap-2">
+            <button onClick={handleAsk}
+              className="flex-1 bg-black text-white px-4 py-2 rounded-lg text-sm hover:bg-zinc-800">
+              Ask 🤖
+            </button>
+            <button onClick={toggleMic}
+              className={`flex-1 px-4 py-2 rounded-lg text-sm border ${
+                recording ? "bg-red-600 border-red-500 text-white animate-pulse"
+                          : "bg-white border-zinc-300 hover:bg-zinc-100"}`}>
+              {recording ? "⏺ Recording… (click to send)" : "🎤 Ask by voice"}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

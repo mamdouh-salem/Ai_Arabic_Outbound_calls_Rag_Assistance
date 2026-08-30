@@ -4,7 +4,7 @@ outbound_ai.auth.dependencies
 FastAPI dependency functions for authentication and role enforcement.
 
 Usage in route handlers:
-    from outbound_ai.auth import get_current_user, require_admin_only, AuthContext
+    from outbound_ai.auth import get_current_user, require_admin_or_above, AuthContext
     from typing import Annotated
     from fastapi import Depends
 
@@ -16,7 +16,7 @@ Usage in route handlers:
     # Role-gated — admin or super_admin only
     @router.post("/kb/documents")
     async def upload_document(
-        ctx: Annotated[AuthContext, Depends(require_admin_only)],
+        ctx: Annotated[AuthContext, Depends(require_admin_or_above)],
     ):
         ...
 
@@ -120,16 +120,14 @@ def require_role(*allowed_roles: AppRole):
 require_super_admin = require_role(AppRole.super_admin)
 """Dependency: super_admin only. Use for platform-level operations."""
 
-require_admin_only = require_role(AppRole.admin)
-"""Dependency: admin only (NOT super_admin). Use for workspace operations: KB, RAG, SQL queries."""
+require_admin_or_above = require_role(AppRole.admin, AppRole.super_admin)
+"""Dependency: admin or super_admin. Use for workspace management, KB uploads."""
 
-require_admin_or_agent = require_role(AppRole.admin, AppRole.agent)
 require_any_role = require_role(AppRole.agent, AppRole.admin, AppRole.super_admin)
 """Dependency: any authenticated workspace member. Equivalent to get_current_user
    but reads more clearly in route definitions that explicitly intend open access."""
 
 # Typed aliases for handler signatures
 SuperAdmin       = Annotated[AuthContext, Depends(require_super_admin)]
-AdminOnly     = Annotated[AuthContext, Depends(require_admin_only)]
-AdminOrAgent     = Annotated[AuthContext, Depends(require_admin_or_agent)]
+AdminOrAbove     = Annotated[AuthContext, Depends(require_admin_or_above)]
 AnyAuthenticatedUser = Annotated[AuthContext, Depends(require_any_role)]

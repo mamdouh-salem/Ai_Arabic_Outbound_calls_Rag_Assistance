@@ -21,7 +21,7 @@ from outbound_ai.agents import intent_classifier, kb_assist, reporting, routing
 from outbound_ai.api.routers import admin_users, data, kb as kb_docs, workspaces
 from outbound_ai.api.routers.data import visible_ticket_filters
 from outbound_ai.auth import AuthContext, get_current_user
-from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
+from outbound_ai.auth.dependencies import AdminOrAgent, CurrentUser
 from outbound_ai.config.settings import get_settings
 from outbound_ai.telephony.vonage_adapter import VonageTelephonyAdapter
 
@@ -388,7 +388,7 @@ async def _place_ticket_call(
 
 
 @app.post("/start-call")
-async def start_call(request: Request, ctx: AdminOrAbove):
+async def start_call(request: Request, ctx: AdminOrAgent):
     """Place a live outbound call. admin/super_admin only — dialing costs
     money and is a campaign-level action."""
     b = await request.json()
@@ -404,7 +404,7 @@ async def start_call(request: Request, ctx: AdminOrAbove):
 
 
 @app.post("/tickets/{ticket_id}/call")
-async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAbove):
+async def call_ticket(ticket_id: str, request: Request, ctx: AdminOrAgent):
     """One-click dial: pulls the ticket + its customer's phone automatically.
     Visibility rules apply (agents cannot reach this route; admins only their
     workspace; super admins any workspace via X-Workspace-Id)."""
@@ -449,7 +449,10 @@ async def event(request: Request):
     status = (b.get("status") or "").lower()
     conv = b.get("conversation_uuid")
     ctx = _adopt_conversation(conv)
-    log.info("vonage_event", status=status, known=ctx is not None)
+    log.info("vonage_event", status=status, known=ctx is not None,
+             **({"reason": b["reason"]} if b.get("reason") else {}),
+             **({"payload": b} if status in ("failed", "busy", "rejected",
+                                             "timeout", "completed") else {}))
 
     if ctx is not None and status:
         mapping = {"started": "dialing", "ringing": "ringing", "answered": "answered"}
@@ -532,6 +535,8 @@ def _adopt_conversation(conv: str):
     If we see an unknown conv while exactly ONE unsaved live call exists,
     adopt it: re-key that call's state under the new conversation_uuid.
     (Single-active-call assumption holds for local/dev testing.)"""
+    if not conv:
+        return CALL_STATE.get(conv)  # nothing to adopt under a missing uuid
     ctx = CALL_STATE.get(conv)
     if ctx is not None:
         return ctx
@@ -615,6 +620,10 @@ async def recording(request: Request):
 
 
 async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
+    # RAG retrieval scope for this call: ticket's workspace + shared main KB
+    call_ws = ctx.get("workspace_id") or DEFAULT_WORKSPACE_ID
+    scope_ids = ([call_ws] if call_ws == DEFAULT_WORKSPACE_ID
+                 else [call_ws, DEFAULT_WORKSPACE_ID])
 
     async def _close(outcome_state: dict):
         intent = await intent_classifier.classify(tr)
@@ -651,10 +660,11 @@ async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
 
     # ---- STAGE 2: explanation given → NOW run similarity search + KB ------
     if flow_stage == 2:
-        # similarity search uses ticket title + the customer's own explanation
+        # similarity search uses ticket title + the customer's own explanation,
+        # scoped to the ticket's workspace (+ the shared main KB)
         query = f"{title} {text}".strip()
         ans, chunks, ok = await kb_assist.retrieve(
-            query, cat, style="call",
+            query, cat, workspace_ids=scope_ids, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         ctx.update({"kb_answer": ans, "sources": [c.get("source") for c in chunks],
                     "kb_answer_given": ok})
@@ -683,9 +693,9 @@ async def _handle_stage(ctx, conv, call_id, text, tr, cat, title, flow_stage):
             ctx["stage"] = 4
             await _adapter.update_call_ncco(call_id, ncco)
             return {}
-        # not done yet / more detail → guide again from the KB
+        # not done yet / more detail → guide again from the KB (same scope)
         ans, chunks, ok = await kb_assist.retrieve(
-            f"{title} {text}", cat, style="call",
+            f"{title} {text}", cat, workspace_ids=scope_ids, style="call",
             ticket_context=f"المشكلة المسجلة في التذكرة: {title}")
         if not ok or _kb_found_no_solution(ans):
             return await _transfer_to_human(ctx, call_id, tr, {

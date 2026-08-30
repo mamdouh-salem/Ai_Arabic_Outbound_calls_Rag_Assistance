@@ -24,7 +24,7 @@ log = structlog.get_logger(__name__)
 def generate_answer(
     question: str,
     category: str | None = None,
-    workspace_id: str | None = None,
+    workspace_ids: list[str] | None = None,
     style: str = "qa",
     ticket_context: str = "",
     persona: str = "default",
@@ -40,7 +40,7 @@ def generate_answer(
     carry per-chunk provenance (id, source, score, snippet) for UI rendering.
     """
     settings = get_settings()
-    chunks = hybrid_search(question, category=category, workspace_id=workspace_id)
+    chunks = hybrid_search(question, category=category, workspace_ids=workspace_ids)
     fallback = TROUBLESHOOT_NO_CONTEXT_FALLBACK if style == "call" else NO_CONTEXT_FALLBACK
     if not chunks:
         return {

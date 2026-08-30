@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from outbound_ai.auth.dependencies import AdminOrAbove, CurrentUser
+from outbound_ai.auth.dependencies import AdminOnly, CurrentUser, get_current_user
 from outbound_ai.auth.models import AppRole, AuthContext
 from outbound_ai.db.service_client import get_service_client
 
@@ -117,16 +117,19 @@ class DataQueryRequest(BaseModel):
 
 
 @router.post("/data/query")
-async def data_query(body: DataQueryRequest, ctx: AdminOrAbove) -> dict:
+async def data_query(body: DataQueryRequest, ctx: AdminOnly) -> dict:
     """Ask questions about the BUSINESS DATA in plain language (Arabic or
     English) — the LLM writes a validated read-only SELECT, we execute it
     with a timeout and return the rows + the generated SQL.
 
-    admin/super_admin only; agents cannot query business data."""
+    Tenant scoping: admins are FORCED into their own workspace (the generated
+    SQL must filter by their workspace_id — validated post-generation).
+    super admins are unrestricted (platform-wide role)."""
     from outbound_ai.rag.sql_rag import run_sql_query
 
+    workspace_id = str(ctx.workspace_id) if ctx.workspace_id else None
     try:
-        return await asyncio.to_thread(run_sql_query, body.question)
+        return await asyncio.to_thread(run_sql_query, body.question, workspace_id)
     except ValueError as exc:
         from fastapi import HTTPException, status
 

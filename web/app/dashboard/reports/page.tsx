@@ -1,37 +1,37 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiFetch } from "../../apiClient";
+import { getCalls } from "../../lib/console";
 
 export default function ReportsPage() {
-  const [totalCalls, setTotalCalls] = useState<number | null>(null);
-  const [error, setError] = useState("");
-
+  const [stats, setStats] = useState<Record<string, number>>({});
   useEffect(() => {
-    async function fetchStats() {
-      try {
-        const data = await apiFetch("/data/query", {
-          method: "POST",
-          body: JSON.stringify({ table: "calls", count_only: true }),
-        });
-        setTotalCalls(data.count ?? data.total ?? 0);
-      } catch (err: any) {
-        setError(err.message);
-      }
-    }
-    fetchStats();
+    getCalls().then((rows: any[]) => {
+      setStats({
+        "Total calls": rows.length,
+        Resolved: rows.filter((r) => r.call_outcome === "resolved").length,
+        Escalated: rows.filter((r) => r.escalated).length,
+        Unresolved: rows.filter((r) => r.call_outcome === "unresolved").length,
+        "Not connected": rows.filter((r) => r.call_outcome === "not_connected").length,
+        "KB assisted": rows.filter((r) => r.kb_answer_given).length,
+      });
+    }).catch(() => {});
   }, []);
 
   return (
-    <div className="p-8">
-      <h1 className="text-2xl font-semibold mb-6">Reports</h1>
-      {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white dark:bg-zinc-900 rounded-lg shadow p-6">
-          <p className="text-zinc-500 text-sm">Total Calls</p>
-          <p className="text-3xl font-semibold mt-2">{totalCalls ?? "—"}</p>
-        </div>
+    <div className="p-8 space-y-4">
+      <h1 className="text-2xl font-semibold">Reports — First Call Resolution</h1>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+        {Object.entries(stats).map(([k, v]) => (
+          <div key={k} className="bg-white border border-zinc-200 rounded-xl p-5">
+            <div className="text-3xl font-bold">{v}</div>
+            <div className="text-xs text-zinc-500 mt-1">{k}</div>
+          </div>
+        ))}
       </div>
+      <p className="text-xs text-zinc-500">
+        Full per-call details live in the Calls tab.
+      </p>
     </div>
   );
 }

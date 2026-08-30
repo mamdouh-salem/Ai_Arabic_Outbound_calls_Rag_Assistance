@@ -235,6 +235,18 @@ curl http://localhost:8000/health                       # unauthenticated → {"
 curl http://localhost:8000/health/auth -H "Authorization: Bearer <jwt>"   # → identity JSON
 ```
 
+### Role-based access summary (implemented)
+
+| Endpoint | Admin | Agent | Super Admin |
+|---|---|---|---|
+| /start-call, /tickets/{id}/call | YES | YES | NO |
+| /kb/documents (upload/list/delete) | YES | NO | NO |
+| /kb/chat, /kb/chat/voice | YES | YES | NO |
+| /data/query (NL to SQL) | YES | NO | NO |
+| /admin/workspaces | NO | NO | YES |
+| /admin/users | NO | NO | YES |
+| /health/auth | YES | YES | YES |
+
 ---
 
 ## Phase 2 requirements
@@ -287,9 +299,9 @@ Three-tier model, each workspace-scoped except the top tier:
 
 | Role | Scope | Can do |
 |---|---|---|
-| **Super admin** | Platform-wide | Create/suspend workspaces, manage billing, assign workspace admins. No routine access to any single workspace's customer data. |
-| **Admin** | One workspace | Manage users within their workspace, upload/edit/delete KB documents, configure campaigns, view all reports and call logs for their workspace. |
-| **User (CSR/agent)** | One workspace | Take over escalated calls, use the RAG co-pilot at the agent desk, view tickets assigned to them. Cannot upload/delete KB documents or manage other users. |
+| **Super admin** | Platform-wide | Create/suspend workspaces, manage billing, assign workspace admins, manage users across ALL workspaces. **Cannot make outbound calls.** |
+| **Admin** | One workspace | Manage users within their workspace, upload/edit/delete KB documents, configure campaigns, view all reports/call logs, **make outbound calls**, use RAG chat/voice, run SQL queries. |
+| **User (CSR/agent)** | One workspace | Take over escalated calls, use the RAG co-pilot (chat/voice) at the agent desk, view tickets assigned to them. **Cannot** upload/delete KB docs, manage users, or make calls. |
 
 Implementation approach:
 - Add a `workspaces` table; add `workspace_id` FK to `customers`, `tickets`,
