@@ -15,7 +15,8 @@ SPARSE_SQL = """
     FROM knowledge_base_chunks
     WHERE fts_tokens @@ plainto_tsquery('arabic', %(query)s)
       AND (%(category)s::text IS NULL OR metadata ->> 'category' = %(category)s)
-      AND (%(workspace_id)s::uuid IS NULL OR workspace_id = %(workspace_id)s::uuid)
+      AND (%(workspace_ids)s::uuid[] IS NULL
+           OR workspace_id = ANY(%(workspace_ids)s::uuid[]))
     ORDER BY score DESC
     LIMIT %(top_k)s
 """
@@ -25,7 +26,7 @@ def sparse_search(
     query: str,
     top_k: int | None = None,
     category: str | None = None,
-    workspace_id: str | None = None,
+    workspace_ids: list[str] | None = None,
 ) -> list[RetrievedChunk]:
     settings = get_settings()
     top_k = top_k or settings.rag_top_k_sparse
@@ -37,7 +38,7 @@ def sparse_search(
                 {
                     "query": query,
                     "category": category,
-                    "workspace_id": workspace_id,
+                    "workspace_ids": workspace_ids,
                     "top_k": top_k,
                 },
             )
