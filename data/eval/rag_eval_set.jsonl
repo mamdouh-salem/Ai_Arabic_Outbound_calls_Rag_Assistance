@@ -1,0 +1,15 @@
+{"id":"acc-01","category":"accounts","question":"سجلت من امبارح ولسه مجاليش رسالة التفعيل، أعمل ايه؟","expected_source":"SOP_Accounts_01.txt","expected_points":["التأكد من صحة البريد الإلكتروني أو رقم الهاتف المسجل","مراجعة مجلد الرسائل غير المرغوب فيها"]}
+{"id":"acc-02","category":"accounts","question":"مش بيوصلي كود استعادة كلمة السر خالص","expected_source":"SOP_Accounts_02.txt","expected_points":["التحقق من قناة الاستعادة المسجلة على الحساب"]}
+{"id":"acc-03","category":"accounts","question":"عايز اغير رقم التليفون المسجل على حسابي","expected_source":"SOP_Accounts_03.txt","expected_points":["التحقق من الهوية عبر رمز تأكيد على البيانات القديمة"]}
+{"id":"acc-04","category":"accounts","question":"ايه اللي بتسألوا عنه قبل ما تعدلوا حاجة مهمة في الحساب؟","expected_source":"SOP_Accounts_04.txt","expected_points":["الاسم الكامل ورقم الهاتف المسجل","سؤال تحقق إضافي"]}
+{"id":"acc-05","category":"accounts","question":"حسابي اتقفل فجأة من غير سبب، ليه؟","expected_source":"SOP_Accounts_05.txt","expected_points":["إيقاف تلقائي لمدة أربع وعشرين ساعة","إجراء أمني وقائي"]}
+{"id":"bil-01","category":"billing","question":"في مبلغ زيادة في الفاتورة مش عارف هو ايه","expected_source":"SOP_Billing_01.txt","expected_points":["مراجعة تفاصيل الفاتورة من النظام","رسوم استخدام زائد عن الباقة أو خدمة إضافية"]}
+{"id":"bil-02","category":"billing","question":"انا دفعت الفاتورة بقالي يومين ولسه مظهرتش مدفوعة","expected_source":"SOP_Billing_02.txt","expected_points":["طلب رقم العملية أو صورة الإيصال","التحقق من سجل المدفوعات"]}
+{"id":"bil-03","category":"billing","question":"مش عايز فاتورة ورق تاني، عايزها على الايميل","expected_source":"SOP_Billing_03.txt","expected_points":["إعدادات الحساب في التطبيق واختيار الفاتورة الإلكترونية"]}
+{"id":"bil-04","category":"billing","question":"ادفع ازاي؟ في كام طريقة؟","expected_source":"SOP_Billing_04.txt","expected_points":["المحفظة الإلكترونية","بطاقة الدفع الإلكتروني","منافذ الدفع المعتمدة"]}
+{"id":"bil-05","category":"billing","question":"لو اتأخرت في الدفع هيتحصل ايه؟","expected_source":"SOP_Billing_05.txt","expected_points":["رسوم تأخير بعد عشرة أيام من الاستحقاق"]}
+{"id":"rou-01","category":"routers","question":"النت بيفصل كل شوية وبيرجع تاني","expected_source":"SOP_Routers_01.txt","expected_points":["فصل الراوتر عن الكهرباء ثلاثين ثانية","الانتظار دقيقتين حتى تستقر اللمبات"]}
+{"id":"rou-02","category":"routers","question":"اللمبة الحمرا في الراوتر بتنور، معناها ايه؟","expected_source":"SOP_Routers_02.txt","expected_points":["مشكلة في خط الإنترنت القادم من خارج المنزل"]}
+{"id":"rou-03","category":"routers","question":"الواي فاي ضعيف في اوضة النوم","expected_source":"SOP_Routers_03.txt","expected_points":["وضع الراوتر في مكان مرتفع ومفتوح","الابتعاد عن الجدران السميكة والأجهزة الكهربائية"]}
+{"id":"rou-04","category":"routers","question":"عايز ادخل على اعدادات الراوتر ازاي؟","expected_source":"SOP_Routers_04.txt","expected_points":["فتح المتصفح وكتابة 192.168.1.1","بيانات الدخول أسفل الجهاز"]}
+{"id":"rou-05","category":"routers","question":"جربت كل حاجة والمشكلة ماتحلتش، في حل تاني؟","expected_source":"SOP_Routers_05.txt","expected_points":["الضغط على زر الإعادة خلف الجهاز عشر ثوانٍ"]}
